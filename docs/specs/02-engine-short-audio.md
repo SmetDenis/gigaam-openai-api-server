@@ -83,9 +83,12 @@ pyproject.toml                    # +torch, +torchaudio, +gigaam(git pin), +sile
   выброс `AudioTooLongError` при duration>25с (замокать `probe_duration`).
 - **unit** (`test_audio.py`): `probe_duration` на крошечном сгенерированном wav; `AudioDecodeError` на битом вводе.
 - **integration** (`test_engine_real.py`, маркер `integration`): реально загрузить лёгкую модель
-  (например `v3_ctc`) и распознать короткий пример (можно `gigaam.utils.download_short_audio()`);
-  проверить непустой текст и наличие слов при `word_timestamps=True`. Помечен так, чтобы НЕ
-  запускаться в обычном `make test`.
+  (например `v3_ctc`) и распознать короткий пример; проверить непустой текст и наличие слов при
+  `word_timestamps=True`. Помечен так, чтобы НЕ запускаться в обычном `make test`.
+  - **⚠️ Не использовать `gigaam.utils.download_short_audio()`** (проверено: `utils.py` зовёт
+    `os.system('wget …')` и пишет в CWD; `wget` на macOS по умолчанию отсутствует → тест упадёт на dev).
+    Держать маленький сэмпл в `tests/integration/data/` (в репозитории) или качать через `httpx`/`urllib`
+    в `tmp`-каталог с cleanup.
 
 ## Debug-логи (этот этап)
 - загрузка модели: `INFO` — имя, device, путь кэша; время загрузки; факт скачивания vs кэш-хит (если различимо).

@@ -36,6 +36,11 @@ tests/unit/test_models_api.py
    (или очередь) для сериализации. `async def run(self, fn, *args, **kwargs)` исполняет блокирующую
    функцию в executor. Создаётся в lifespan, кладётся в `app.state.runner`. Гарантирует: одновременно
    не более одного инференса; event loop не блокируется.
+   - **Лимит очереди (проверено):** при переполнении возвращать **503** (OpenAI-формат), а не молчаливо
+     висеть часами (на 4 ядрах один longform — это часы). Лимит — в конфиг (напр. `MAX_QUEUE`).
+   - **Отмена (проверено):** задачу в ThreadPool **нельзя прервать** при disconnect — поток досчитает.
+     Реальная отмена только кооперативная: longform-цикл проверяет `await request.is_disconnected()`
+     (через флаг, прокинутый в воркер) **между батчами** и прерывается. Для short — не отменяемо (терпимо).
 2. **`auth.py`**: FastAPI-зависимость `require_auth` — читает `Authorization: Bearer <key>`,
    сравнивает с `settings.API_KEY`. Если `API_KEY` пуст → auth выключен (пропускать). Иначе при
    отсутствии/несовпадении → 401 в OpenAI-формате. Сравнение — `secrets.compare_digest`.
@@ -53,7 +58,9 @@ tests/unit/test_models_api.py
    - `to_json(result) -> dict`;
    - `to_text(result) -> str`;
    - `to_verbose_json(result, *, granularities: set[str]) -> dict` — заполнить недоступные поля
-     нейтральными значениями (master §6.3); `segments`/`words` включать по `granularities`;
+     best-effort (master §6.3): `tokens=[]`, `temperature=0.0`, `avg_logprob=0.0`, `no_speech_prob=0.0`,
+     а `compression_ratio` считать честно `len(text)/len(zlib.compress(text.encode()))` (проверено, дёшево);
+     `segments`/`words` включать по `granularities`;
    - `to_srt(result) -> str`, `to_vtt(result) -> str` — из `result.segments`:
      - SRT: `index`, строка `HH:MM:SS,mmm --> HH:MM:SS,mmm`, текст, пустая строка;
      - VTT: заголовок `WEBVTT\n\n`, время `HH:MM:SS.mmm --> HH:MM:SS.mmm`;
@@ -61,8 +68,12 @@ tests/unit/test_models_api.py
 6. **`api/transcriptions.py`**: `POST /v1/audio/transcriptions`, зависимость `require_auth`.
    - Принять multipart: `file` (req), `model`, `response_format`, `timestamp_granularities[]`,
      `language`, `stream`, `prompt`, `temperature` (последние два — принять и игнорировать).
-   - Валидация: `model` ∈ `ALLOWED_MODELS` (иначе 400); `response_format` ∈ допустимых;
-     размер ≤ `MAX_UPLOAD_MB` (иначе 413); сохранить во временный файл (контекст-менеджер, удалять в finally).
+   - Валидация: `model` ∈ `ALLOWED_MODELS` (иначе 400); `response_format` ∈ допустимых.
+   - **Потоковая запись upload (проверено):** НЕ делать `await file.read()` целиком — Starlette `UploadFile`
+     при `await read()` без аргумента грузит весь файл в RAM (2 ГБ при `MAX_UPLOAD_MB=2048` убьёт 8 ГБ).
+     Писать на диск чанками: `while chunk := await file.read(1<<20): tmp.write(chunk)`, считая размер **по ходу**
+     и обрывая на превышении `MAX_UPLOAD_MB` → **413** (`Content-Length` ненадёжен / может отсутствовать при
+     chunked). Временный файл — контекст-менеджер, удалять в `finally`.
    - probe длительности; если > `MAX_AUDIO_SECONDS` (и лимит >0) → 400.
    - Определить `word_timestamps` из `timestamp_granularities` (есть `word`).
    - Через `runner.run(engine.transcribe, tmp_path, word_timestamps=...)` получить `ASRResult`.

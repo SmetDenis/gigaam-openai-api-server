@@ -137,7 +137,9 @@ gigaam-api/
 - `config.Settings` — единственный источник конфигурации; читается из `.env`.
 - `ASREngine` (Protocol) — контракт инференса; не знает про HTTP.
 - `GigaAMEngine` — обёртка над `gigaam.load_model`; реализует short и longform.
-- `vad.segment_audio` — Silero VAD + чанкинг; возвращает `(сегменты, границы)`.
+- `vad` — Silero VAD + чанкинг: `speech_intervals(...)` (речевые интервалы) + чистая функция
+  `merge_intervals_to_chunks(...) -> list[(start,end)]` (только границы чанков). Нарезку срезов waveform
+  по границам делает engine (см. этап 03) — так чистая функция чанкинга тестируется изолированно.
 - `formats` — чистые функции рендеринга; не знают про модель.
 - `runner.Runner` — сериализация блокирующего инференса; не знает про модель и HTTP.
 - `api/*` — только HTTP-слой: парсинг, валидация, вызов engine через runner, рендер.
@@ -219,9 +221,15 @@ model = gigaam.load_model(
   "words": [ { "word": "...", "start": 0.0, "end": 0.3 } ]
 }
 ```
-GigaAM не отдаёт `tokens/avg_logprob/compression_ratio/no_speech_prob` — заполняем нейтральными
-значениями (best-effort) и фиксируем это в README. `segments`/`words` включаются согласно
-`timestamp_granularities[]` (по умолчанию `segment`).
+GigaAM не отдаёт `tokens/avg_logprob/compression_ratio/no_speech_prob` — заполняем best-effort
+значениями и фиксируем это в README. **Уточнение (проверено по реальным ответам Whisper):**
+у OpenAI эти поля не нейтральны: `avg_logprob` ≈ −0.2…−0.5 (отрицательный), `no_speech_prob` ≈ 0.01…0.35,
+`compression_ratio` ≈ 0.8…1.3. Наши `0.0` безопасны для клиентских фильтров (пороги Whisper:
+`avg_logprob<−1.0`, `no_speech_prob>0.6` — наши значения их не триггерят), но семантически означают
+«идеальная уверенность». Рекомендация: `tokens=[]`, `temperature=0.0`, `avg_logprob=0.0`,
+`no_speech_prob=0.0`, а **`compression_ratio` считать честно**: `len(text)/len(zlib.compress(text.encode()))`
+(дёшево). Прецедент: vLLM (OpenAI-совместимый) `no_speech_prob` вовсе опускает. `segments`/`words`
+включаются согласно `timestamp_granularities[]` (по умолчанию `segment`).
 
 ### 6.4 Стриминг (`stream=true`) — SSE
 - `Content-Type: text/event-stream`.
@@ -294,8 +302,9 @@ OpenAI-подобный список: `{"object":"list","data":[{"id":"<MODEL>",
 - `python = 3.12`
 - `fastapi`, `uvicorn[standard]`, `python-multipart`, `pydantic>=2`, `pydantic-settings`
 - `torch>=2.6`, `torchaudio>=2.6` (Mac: дефолтные колёса с MPS; Docker/Linux: **CPU-колёса** через `--index-url https://download.pytorch.org/whl/cpu`)
-- `gigaam @ git+https://github.com/salute-developers/GigaAM.git@<PINNED_REV>` — **пиннинг ревизии обязателен**. Тянет core-зависимости GigaAM (hydra-core, omegaconf, onnx, onnxruntime, soundfile, sentencepiece, numpy, tqdm). torch ставим сами (не через extra), чтобы контролировать индекс/арх.
-- `silero-vad` (pip-пакет: `load_silero_vad`, `get_speech_timestamps`)
+- `gigaam @ git+https://github.com/salute-developers/GigaAM.git@<PINNED_REV>` — **пиннинг ревизии обязателен**. Тегов в репозитории нет → пин только по коммиту. **`PINNED_REV = 6e4b027` (2026-04-15)** — проверенная ревизия. Тянет core-зависимости GigaAM (hydra-core, omegaconf, `onnx==1.19.*`, `onnxruntime==1.23.*`, soundfile, sentencepiece, `numpy==2.*`, tqdm). torch ставим сами (не через extra), чтобы контролировать индекс/арх.
+  - **Проверено (PyPI, 06.2026):** `onnxruntime==1.23.*` имеет колёса `cp312-macosx_13_0_arm64` (dev-Mac, нужен macOS ≥13.0) и `cp312-manylinux_2_28_x86_64` (Synology). Ставится везде. **⚠️ НЕ апгрейдить onnxruntime выше пина gigaam:** `onnxruntime 1.26.0` убрал macOS arm64 колёса (issue #28441 → «pin < 1.26.0»), а 1.24+ убрал macOS x86_64. numpy `==2.*` — широкий пин, совместим с py3.12 и torch.
+- `silero-vad` (pip-пакет: `load_silero_vad`, `get_speech_timestamps`; для потоковой обработки длинных файлов — `VADIterator`)
 
 **Dev:**
 - `ruff`, `mypy`, `pytest`, `pytest-cov`, `pytest-asyncio`, `httpx` (TestClient), нужные `types-*`.
@@ -330,8 +339,9 @@ OpenAI-подобный список: `{"object":"list","data":[{"id":"<MODEL>",
 
 ## 11. Память, ресурсы, надёжность
 
-- **Память (8 ГБ):** декодировать аудио в int16; во float конвертировать **по сегментам** (а не весь файл сразу). Пик ≈ веса (~1 ГБ) + ~1.2 ГБ на буфер даже для 10ч. `BATCH_SIZE` малый на CPU.
-- **Конкурентность:** один экземпляр модели; инференс сериализован через `Runner` (один поток-воркер + `run_in_executor`), event loop не блокируется. Очередь с разумным лимитом.
+- **Память (8 ГБ):** декодировать аудио в int16; во float конвертировать **по сегментам/батчам** для стадии инференса. **⚠️ Уточнение (проверено):** Silero `get_speech_timestamps(wav, …)` принимает **весь** аудиосигнал как float32 → на VAD-стадии пик float ≈ 2.3 ГБ/10ч (одновременно с int16-буфером ~1.15 ГБ), а не «только батч». Реальный пик на длинном файле ≈ веса (~1 ГБ) + int16 (1.15 ГБ) + float-VAD (2.3 ГБ). На длинных записях у Silero известен рост памяти (issue #356). Митигации: (а) после VAD сразу освобождать float-сигнал, инференс — батчами int16→float; (б) для очень длинных файлов — потоковый `VADIterator` (чанки по 512 сэмплов), не загружая весь float. `BATCH_SIZE` малый на CPU.
+- **Конкурентность:** один экземпляр модели; инференс сериализован через `Runner` (один поток-воркер + `run_in_executor`), event loop не блокируется. Очередь с разумным лимитом → при переполнении **503** (а не молчаливое ожидание).
+- **Отмена (проверено):** задачу в `run_in_executor`/ThreadPool **нельзя прервать** при disconnect клиента — поток досчитает (для 10ч это часы CPU «в никуда»). Реальная отмена — только кооперативная: в longform проверять `await request.is_disconnected()` (или флаг) **между батчами** и прерывать цикл. Опц. таймаут запроса.
 - **Ошибки:** ffmpeg-сбой → 500 с понятным сообщением; неподдерживаемый/битый файл → 400; лимиты → 413/400.
 - **Health:** `/health` → `{status, model, device, loaded}`; модель грузится в lifespan (первый старт = скачивание весов).
 
@@ -339,9 +349,10 @@ OpenAI-подобный список: `{"object":"list","data":[{"id":"<MODEL>",
 
 ## 12. Риски (явно)
 
-- **GigaAM на MPS** upstream не тестируют → возможно нужен `PYTORCH_ENABLE_MPS_FALLBACK=1`; на Mac это dev-ускорение, фоллбэк на cpu всегда доступен.
+- **GigaAM на MPS** upstream не тестируют → возможно нужен `PYTORCH_ENABLE_MPS_FALLBACK=1`; на Mac это dev-ускорение, фоллбэк на cpu всегда доступен. **Доп. риск (проверено):** на свежих macOS 26.x встречаются регрессии MPS в torch (pytorch#177819) — dev-машина (Darwin 25.5 = macOS 26) под риском; CPU-фоллбэк обязателен.
 - **Скорость на 4 ядрах:** 10ч аудио = часы счёта (RTF может быть ≥1). Сервис батчевый; SSE даёт прогресс. Митигации: CTC-модель, int8 (этап 07), позже ONNX.
-- **`gigaam` git-зависимость на Python 3.12** — проверить колёса torch/зависимостей на этапе 02; пиннинг ревизии.
+- **`gigaam` git-зависимость на Python 3.12** — проверить колёса torch/зависимостей на этапе 02; пиннинг ревизии (`6e4b027`).
+- **onnxruntime (core-dep gigaam) — ловушка апгрейда (проверено):** пин `==1.23.*` ставится на Mac arm64 и Linux amd64 (py3.12), но `1.26.0` убрал macOS arm64 колёса. Не обновлять onnxruntime поверх пина gigaam — иначе dev-Mac не соберётся. Детали — §9.
 - **Единый lock Mac/Linux для torch** — см. §9, решается в Dockerfile.
 
 ---
