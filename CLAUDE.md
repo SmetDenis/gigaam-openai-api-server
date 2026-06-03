@@ -1,150 +1,158 @@
-# CLAUDE.md — GigaAM ASR (OpenAI-совместимый сервис)
+# CLAUDE.md — GigaAM ASR (OpenAI-compatible service)
 
-Сервис распознавания **русской речи** на базе [GigaAM](https://github.com/salute-developers/GigaAM),
-выставляющий **OpenAI-совместимый** API (`POST /v1/audio/transcriptions`). Запускается как
-локальный домашний сервис на Synology (Docker) и разрабатывается на macOS.
+A **Russian-speech** recognition service built on [GigaAM](https://github.com/salute-developers/GigaAM),
+exposing an **OpenAI-compatible** API (`POST /v1/audio/transcriptions`). Runs as a self-hosted
+service in Docker (any CPU host: Linux server / NAS / mini-PC) and is developed on macOS.
 
-## Источник истины — спеки
+> **This is the project's main guide document** (for Claude and developers): architecture, current
+> status, ADR log of accepted decisions, and conventions. The source of truth for requirements is
+> this file and the code itself.
 
-Проект строится **поэтапно, в разных сессиях**. Полные требования — в `docs/specs/`:
+## Status
 
-- **`docs/specs/README.md`** — план реализации по сессиям + рекомендации/советы (читать первым).
-- **`docs/specs/00-master.md`** — генеральный спек: архитектура, ВСЕ решения, OpenAI-маппинг,
-  конфиг, логирование, риски и **трекер этапов** (актуальный статус — там).
-- `01-scaffolding.md` … `07-cpu-optimization.md` — самодостаточные этапные спеки.
+Stage **06 ✅** (Docker / self-hosted deployment: multi-stage `python:3.12-slim`, **CPU-torch via
+index+marker** in `pyproject.toml` — a single `uv.lock` for Mac(MPS)/Linux(`2.12.0+cpu`),
+CUDA/nvidia/triton no longer pulled in; **self-contained image** — ffmpeg+ffprobe from apt, non-root
+UID 1000, healthcheck via stdlib urllib; `docker-compose.yml` for the **`docker compose` CLI**
+(`env_file required:false`, volume `./models:/data/models`, `start_period 600s` for the first weights
+download, optional `tools` profile for warm-up); `download_weights.py`; final README. Deploy =
+`docker compose up -d`, **no make** in production; Silero is bundled in the package → the volume is
+only for GigaAM weights). Next — `07` (optional CPU optimization).
+Stage **05 ✅** (SSE streaming `stream=true`: `transcript.text.delta`→`transcript.text.done`→`[DONE]`,
+invariant `"".join(delta)==done.text==sync` (prefix space), heartbeat comments ~15s against
+idle timeouts; `iter_segments` (shared batch loop with longform); thread→async bridge via
+`asyncio.Queue` + `Runner.submit` into the same worker; backpressure `try_acquire`→503 BEFORE headers;
+temp-file ownership handed to the stream; verbose/srt/vtt+stream → synchronous fallback; error in the
+stream → `error` event).
+Stage **04 ✅** (OpenAI-compatible API: `POST /v1/audio/transcriptions` all formats
+`json`/`text`/`verbose_json`/`srt`/`vtt`, `GET /v1/models`, Bearer auth, OpenAI error format;
+`Runner` (1 worker + `MAX_QUEUE`→503); cooperative longform cancellation on disconnect via an **anyio
+task group**; chunked upload→413; probe limit→400). Stage **03 ✅** (longform >25s: Silero VAD (JIT)
+→ pure chunking function `merge_intervals_to_chunks` (ported from gigaam) → batched
+`model.forward`/`model._decode`; duration-based routing inside the engine; int16 decode to save
+memory; no pyannote). Stage **02 ✅** (PyTorch ASR engine behind `ASREngine`, short audio ≤25s,
+model load in the lifespan, weights cache in `MODELS_DIR`, `/health.loaded=true`). Stage **01 ✅**
+(skeleton, tooling, logging, FastAPI skeleton).
 
-**Перед любой работой:** прочитай `00-master.md` + спек текущего этапа. После работы —
-обнови трекер этапов в `00-master.md` (⬜→🟡→✅).
+**Stage tracker:**
 
-## Статус
-
-Этап **06 ✅** (Docker/деплой на Synology: multi-stage `python:3.12-slim`, **CPU-torch через
-index+marker** в `pyproject.toml` — единый `uv.lock` Mac(MPS)/Linux(`2.12.0+cpu`), CUDA/nvidia/triton
-больше не тянутся; **самодостаточный образ** — ffmpeg+ffprobe из apt, non-root UID 1000, healthcheck
-через stdlib urllib; `docker-compose.yml` под **Synology Container Manager UI** (`env_file required:false`,
-volume `./models:/data/models`, `start_period 600s` под первый скач весов, опц. профиль `tools` для
-прогрева); `download_weights.py`; финальный README. Деплой = compose + UI, **без make** на проде;
-Silero бандлится в пакете → volume только для весов GigaAM). Следующий — `07` (опц. CPU-оптимизация).
-Этап **05 ✅** (SSE-стриминг `stream=true`: `transcript.text.delta`→`transcript.text.done`→`[DONE]`,
-инвариант `"".join(delta)==done.text==sync` (префикс-пробел), heartbeat-комментарии ~15с против
-idle-таймаутов; `iter_segments` (общий батч-цикл с longform); мост поток→async через `asyncio.Queue`
-+ `Runner.submit` в тот же воркер; backpressure `try_acquire`→503 ДО заголовков; передача владения
-temp-файлом стриму; verbose/srt/vtt+stream→синхронный фоллбэк; ошибка в потоке→`error`-событие).
-Этап **04 ✅** (OpenAI-совместимый API: `POST /v1/audio/transcriptions` все форматы
-`json`/`text`/`verbose_json`/`srt`/`vtt`, `GET /v1/models`, Bearer-auth, OpenAI-формат ошибок;
-`Runner` (1 воркер + `MAX_QUEUE`→503); кооперативная отмена longform по disconnect через **anyio
-task group**; upload чанками→413; probe-лимит→400). Этап **03 ✅** (longform >25с: Silero VAD (JIT)
-→ чистая функция чанкинга `merge_intervals_to_chunks` (порт из gigaam) → батчевый
-`model.forward`/`model._decode`; роутинг по длительности внутри движка; int16-декод для экономии
-памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с,
-загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас,
-тулинг, логирование, FastAPI-скелет).
-Актуальный трекер — в `00-master.md` §13.
-
-## Архитектурные решения (ADR-лог)
-
-> **Правило:** любое новое архитектурное решение, принятое в ходе разработки, **дописывается сюда**
-> (дата · решение · причина) — чтобы переиспользовать опыт между сессиями. Это живой раздел.
-> Подробное обоснование исходных решений — в `docs/specs/00-master.md` §3.
-
-| Дата | Решение | Причина |
+| Stage | Topic | Status |
 |---|---|---|
-| 2026-06-03 | Backend инференса — **PyTorch** за абстракцией `ASREngine` (ONNX опционально, этап 07) | Полный API GigaAM из коробки; один код на cpu/mps/cuda. |
-| 2026-06-03 | VAD длинных аудио — **Silero VAD** (НЕ pyannote) | Лёгкий, без HF_TOKEN/лицензий; убирает тяжёлые зависимости; спикер один. |
-| 2026-06-03 | **Python 3.12**, менеджер **uv** | Совместимость torch/MPS; 3.14 слишком свежий. |
-| 2026-06-03 | Модель — через `.env` (`MODEL`), по умолчанию CTC | CTC быстрее на CPU (Synology). |
-| 2026-06-03 | Auth — Bearer-ключ из `.env` (`API_KEY`) | Совместимо с OpenAI-клиентами. |
-| 2026-06-03 | Веса — скачиваются при первом старте в volume (`MODELS_DIR`), НЕ в образе | Лёгкий образ. |
-| 2026-06-03 | API — синхронный `transcriptions` + опц. `stream=true` (SSE); эндпоинты `transcriptions`, `/v1/models`, `/health` | Стандарт OpenAI; SSE против таймаутов. translations/WebSocket — вне scope. |
-| 2026-06-03 | Сборка пакета — **hatchling** (editable install через `uv sync`) | `gigaam_api` импортируется в pytest/mypy/uvicorn; `uvicorn gigaam_api.main:app` работает надёжно. |
-| 2026-06-03 | Пиннинг — **нижние границы (`>=`) в `pyproject.toml` + точные пины в `uv.lock`** | Идиома uv: воспроизводимость через lock, апгрейд осознанно через `uv lock --upgrade`. |
-| 2026-06-03 | `DEVICE=auto` резолвим **сами** (cuda→mps→cpu), в `load_model` передаём явный device (этап 02) | Встроенный auto GigaAM (`device=None`) = cuda→cpu, **без MPS**; MPS нужен на dev-Mac. На этапе 01 `/health.device` = эхо настройки. |
-| 2026-06-03 | CSV-поля Settings (`ALLOWED_MODELS`) — **`Annotated[..., NoDecode]` + `field_validator`** | pydantic-settings по умолчанию парсит `list` как JSON; NoDecode + `split(",")` даёт CSV. |
-| 2026-06-03 | ruff: отключены **RUF001/002/003** (ambiguous-unicode) | Ложные срабатывания на легитимную кириллицу в комментариях/докстрингах (конвенция — русский). |
-| 2026-06-03 | gigaam пин **`6e4b027`** проверен: `torch==2.12.0`/`torchaudio==2.11.0` + `onnxruntime==1.23.2`/`onnx==1.19.1`/`numpy==2.4.6` ставятся на **Python 3.12 macOS arm64** (dev) | Этап 02 — блокер-проверка колёс пройдена; MPS доступен, CUDA нет. |
-| 2026-06-03 | `uv add` хранит git-пин gigaam в **`[tool.uv.sources]`** (`rev=6e4b027`), зависимость объявлена как голое `gigaam` | Идиома uv; пин сохранён (rev + `uv.lock`), форма эквивалентна `gigaam @ git+...@rev`. |
-| 2026-06-03 | Маршрутизация >25с: **pre-check `probe_duration`>25с → `AudioTooLongError`** + защитный перехват сырых исключений gigaam (`ValueError "too long"`→`AudioTooLongError`, `RuntimeError "failed to load audio"`→`AudioDecodeError`); прочие — пробрасываем | gigaam меряет длину по сэмплам, probe — секунды → у границы 25с возможен рассинхрон; не маскируем посторонние ошибки инференса. |
-| 2026-06-03 | `ASREngine` расширен **`info()` + `@runtime_checkable`**; `/health` сужает тип `app.state.engine` через `isinstance`, **не импортируя gigaam/torch** | Принцип master §4.3 «HTTP ⟂ инференс»: HTTP-слой остаётся лёгким, `create_app()` без torch (ленивый импорт движка в lifespan). |
-| 2026-06-03 | mypy: **per-module `ignore_missing_imports`** для `gigaam.*`/`silero_vad.*` | Нет py.typed/стабов; точечный override идиоматичнее широкого `# type: ignore`. |
-| 2026-06-03 | Интеграционный сэмпл — **committed `tests/integration/data/ru_short_sample.wav`** (11.29с, RU; имя ≠ `example.wav`); тест на **cpu**, грейсфул-skip без сети/весов | `.gitignore` глобально игнорирует throwaway `example.wav` (его пишет `gigaam.utils`); отдельное имя сохраняет конвенцию и трекает фикстуру. cpu = детерминизм + прод-Synology. |
-| 2026-06-03 (этап 03) | Silero backend — **JIT (`load_silero_vad(onnx=False)`), НЕ ONNX** | Один torch-стек с GigaAM; onnxruntime по умолчанию `intra_op_num_threads=0` (все ядра) → oversubscription с torch-пулом на 4 ядрах Synology. VAD не bottleneck (≈часы инференса vs минуты VAD). Веса бандлятся в пакете (без сети). Переключение в ONNX позже = 1 строка. |
-| 2026-06-03 (этап 03) | **Роутинг внутри движка** (заменяет stage-02 строку выше): `probe_duration` → `>MAX_AUDIO_SECONDS`→`AudioTooLongError`; `≤25с`→short (делегируем `model.transcribe`, не трогаем); иначе→`_transcribe_longform`. `ValueError "too long"` у границы теперь → **fallback в longform** (не ошибка) | `AudioTooLongError` на обычном пути убран (спек 03 задача 6); short-путь не переписываем (минимум риска для hot-path); у границы 25с gigaam меряет по сэмплам → корректнее уйти в longform, чем падать. |
-| 2026-06-03 (этап 03) | Longform — порт `gigaam/vad_utils.py::segment_audio_file`: **чистая функция `merge_intervals_to_chunks` (только границы)** + срез waveform/батчинг в engine; интервалы от Silero; инференс через приватные `model.forward`/`model._decode` (master §5.1); слова `+seg_start`, `round(...,3)` | Чистую логику слияния тестируем синтетикой изолированно (ядро этапа); `transcribe_longform` upstream не зовём (он тянет pyannote). |
-| 2026-06-03 (этап 03) | Память: декод в **int16 `torch.Tensor`** (`torch.frombuffer`, без numpy); весь сигнал во float **только на VAD-стадию** → `del wav_f32` сразу; инференс — float по срезу-батчу | int16 вдвое экономит память (~1.15 ГБ/10ч); пик float — на VAD (≈2.3 ГБ/10ч), не на батчах; numpy не добавляем — остаёмся в torch-стеке. Ленивые импорты torch в `audio.py` (модуль остаётся torch-free для HTTP-слоя). |
-| 2026-06-03 (этап 03) | Longform-фикстура — **committed `ru_long_sample.wav`** (40с, обрезка реального GigaAM `long_example.wav` через ffmpeg, mono 16k) | Реальная RU-речь с паузами → >1 чанк; НЕ `gigaam.utils.download_long_audio()` (wget в CWD). Грейсфул-skip без сети/весов. |
-| 2026-06-03 (этап 04) | Отмена longform при disconnect — **кооперативная**: `ASREngine.transcribe` расширен опц. `cancel_check: Callable[[], bool] \| None`; longform проверяет в начале каждой итерации батча → `InferenceCancelledError`; API ставит watcher на `request.is_disconnected()` → `threading.Event`. Short-путь (≤25с) неотменяем. | ThreadPool-задачу прервать нельзя (проверено) — поток досчитает; воркер один → брошенный longform блокирует очередь для всех. Реальная отмена только кооперативная. |
-| 2026-06-03 (этап 04) | Backpressure — один ключ **`MAX_QUEUE=8`**; `Runner` считает admitted (очередь+работа), при `≥MAX_QUEUE` → `QueueFullError`→**503**. Таймаут запроса **НЕ вводим**. | Дефолтный таймаут рубил бы легитимные многочасовые файлы (RTF≥1); «брошенное задание» решается отменой, а не грубым таймаутом. YAGNI. |
-| 2026-06-03 (этап 04) | Маппинг ошибок — **разделить причину в `audio.py`**: `FileNotFoundError` (ffmpeg/ffprobe не в PATH) → новое `AudioToolNotFoundError`→**500** (`api_error`); битый/неподдерживаемый файл → `AudioDecodeError`→**400** (`invalid_request_error`). `UnsupportedFormatError`/**415 выкинуты**. | Реальный OpenAI на плохой аудиофайл отдаёт 400 `invalid_request_error` («Unrecognized file format…» / «Audio file might be corrupted…»), 415 не использует (проверено). Один код для клиентской и серверной причин — неверен (root-cause). |
-| 2026-06-03 (этап 04) | OpenAI-уточнения — `timestamp_granularities[]` через `Form(alias="timestamp_granularities[]")`+`list[str]`; verbose `seek=0` + честный per-segment `compression_ratio`; `stream=true`=синхронный ответ до этапа 05; `/v1/models`=весь `ALLOWED_MODELS`. | Канонический OpenAI-клиент шлёт поле с `[]` (проверено). `seek=0` — безопасный совместимый дефолт; `compression_ratio` дёшев и осмысленен. Контракт фиксируется в README. |
-| 2026-06-03 (этап 04) | `compression_ratio` — **байты/байты** `len(b)/len(zlib.compress(b))`, `b=text.encode()` (НЕ `len(text)` в символах). | Реальный Whisper считает байты с обеих сторон; для кириллицы (2 байта/символ) числитель в символах занижал бы ratio вдвое → порог галлюцинаций (>2.4) не сработал бы. Поймано на код-ревью этапа 04. |
-| 2026-06-03 (этап 04) | Watcher disconnect'а — **только через `anyio.create_task_group()` + `cancel_scope.cancel()`**, НЕ через `asyncio.create_task` + `task.cancel()`/`await task`. Исход инференса захватываем внутри группы и диспетчеризуем снаружи (иначе `QueueFullError` обернётся в `ExceptionGroup` → 500 вместо 503). | `Request.is_disconnected()` (Starlette 1.2.x) внутри держит `anyio.CancelScope`; raw-asyncio отмена с ней конфликтует → watcher не завершается, `await watcher` **дедлочит** весь запрос (поймано faulthandler'ом: event loop idle в select, главный поток ждёт portal). Структурная anyio-отмена консистентна. |
-| 2026-06-04 (этап 05) | Семантика delta — **префикс-пробел**: первый delta=`seg0.text`, последующие=`" "+segN.text`; `done.text=" ".join(сегменты)`. Инвариант: `"".join(delta)==done.text==синхронному`. Уточняет master §6.4 («+пробел в конце»). | Универсальный инвариант стриминга OpenAI (chat/responses/transcription, проверено по docs): склейка delta точно воспроизводит финальный текст. Суффикс-пробел дал бы хвостовой пробел → расхождение с `done`/sync (acceptance §05). |
-| 2026-06-04 (этап 05) | Мост «блокирующий `iter_segments` → async» — **`asyncio.Queue` + `loop.call_soon_threadsafe`**, продюсер в **`Runner.submit` (тот же 1 воркер)**, НЕ временный поток. Очередь без `maxsize` (продюсер — bottleneck, никогда не блокируется на put). | Сериализация инференса сохранена (1 за раз), event loop не блокируется. `call_soon_threadsafe` — канонический мост поток→loop. heartbeat реализуем через `wait_for(queue.get(), 15s)` (отмена своей корутины безопасна), НЕ через `wait_for(__anext__())` чужого генератора (его отмена убила бы мост). |
-| 2026-06-04 (этап 05) | Backpressure при стриме — **`runner.try_acquire()` в обработчике ДО `StreamingResponse`** (503 без заголовков); `release()` — в **done-callback future продюсера** (воркер реально свободен), не когда consumer дочитал. `_inflight` под `threading.Lock` (меняют loop и воркер-поток). | Async-генератор откладывает тело до первой итерации (после `200`) → 503 нужно отдать раньше. Release по завершению продюсера = inflight отражает занятость воркера, а не скорость клиента. |
-| 2026-06-04 (этап 05) | **Владение temp-файлом передаётся стриму**: handler ставит флаг `streamed`, `finally` НЕ удаляет файл; удаляет `_cleanup` (done-callback продюсера), когда воркер закончил читать. | Handler возвращает `StreamingResponse` и его `finally` сработал бы СРАЗУ → удалил бы файл до чтения воркером (root-cause). Файл нужен на всё время инференса. |
-| 2026-06-04 (этап 05) | Отмена стрима — **`cancel_event.set()` в `finally` генератора моста**; Starlette сам отменяет генератор при disconnect (uvicorn HTTP `spec_version=2.3 < 2.4` → ветка task group с `listen_for_disconnect`). НЕ переиспользуем anyio-watcher этапа 04. | `iter_segments` стопает между батчами (та же гранулярность, что sync-путь). `sse_transcription` ловит `Exception` (→ error-событие), но пропускает `CancelledError`/`GeneratorExit` (disconnect → только очистка). |
-| 2026-06-04 (этап 05) | `verbose_json`/`srt`/`vtt` + `stream=true` → **синхронный фоллбэк** (игнор `stream`), НЕ 400 (отклонение от спека §05). Условие стрима: `stream and fmt in {json,text}`. | Большинство OpenAI-клиентов шлют `stream=true` по умолчанию и используют `verbose_json` → 400 ломал бы их. Предсказуемость сохранена: эти форматы всегда дают полный ответ. Спек §05 и master §6.4 обновлены. |
-| 2026-06-04 (этап 05) | `iter_segments` — **общий батч-цикл `_iter_chunks`** (+ `_prepare_longform`), переиспользуемый sync-`_transcribe_longform` (через `list(...)`). Добавлен в `ASREngine` Protocol → фейки-движки в тестах реализуют его (runtime_checkable проверяет наличие метода → иначе `/health` ломается). | Один источник longform-логики (DRY); sync-поведение не изменилось. `iter_segments` для ≤25с делегирует короткому пути и yield'ит его единственный сегмент. |
-| 2026-06-04 (этап 06) | CPU-torch — **`index+marker` в `pyproject.toml`** (НЕ «отдельный шаг в Dockerfile» из спека §06): `[[tool.uv.index]] pytorch-cpu` (`explicit=true`) + `[tool.uv.sources]` torch/torchaudio с маркером `sys_platform=='linux'`. Единый `uv.lock`: Mac → `torch 2.12.0` (PyPI, MPS), Linux → `2.12.0+cpu` (индекс). В Dockerfile просто `uv sync --frozen`. | Идиома uv 2026 (проверено по докам). Побочно `uv lock` **убрал из Linux-резолва весь CUDA-стек** (`nvidia-*`, `triton`, `cuda-*`) — старый lock тянул бы CUDA-torch в образ (гигабайты). Воспроизводимость через единый lock, без хрупкого `--no-install-package` в Dockerfile. |
-| 2026-06-04 (этап 06) | Образ — **multi-stage `python:3.12-slim`**: builder (uv из `ghcr.io/astral-sh/uv` пин + `git` для git-gigaam, `uv sync --no-install-project` слой деп → COPY код → `uv sync`) + тонкий runtime (ffmpeg+ffprobe из apt, non-root **UID/GID 1000**, COPY `.venv`+`gigaam_api`). Платформа — на **build-time** (`docker build --platform linux/amd64`), НЕ хардкод в `FROM`. HEALTHCHECK — `python -c urllib` (в slim нет curl). `XDG_CACHE_HOME=/data/models/.cache`. | **Самодостаточный образ**: ffmpeg внутри (Synology его не имеет — критично). Кэш-слои деп отдельно от кода. `--platform` не в `FROM` → мультиарх-дружественно + быстрая нативная валидация на Mac (arm64, без qemu — проверено, сборка ~90с). UID 1000 + chown volume — права записи весов non-root. |
-| 2026-06-04 (этап 06) | **Silero бандлится в pip-пакете** (`silero_vad/data/*.jit/.onnx` в site-packages) → volume нужен **только** для весов GigaAM (`MODELS_DIR`). Спек §06 «кэшировать Silero/HF в volume» **неактуален**: HF Hub / torch.hub проект не использует; `XDG_CACHE_HOME`→volume оставлен лишь защитной сетью для non-root. | Проверено `find .venv` — модель Silero в пакете, сеть/кэш для VAD не нужны (согласуется с ADR этапа 03). Не плодим лишние volume/ENV. |
-| 2026-06-04 (этап 06, багфикс) | Longform-инференс (`_iter_chunks`: `forward`+`_decode`) обёрнут в **`torch.inference_mode()`** — как `gigaam.transcribe`/`transcribe_longform` (оба `@torch.inference_mode()`). Без обёртки автоград включён, и кэш rotary `cos`/`sin` энкодера, созданный коротким путём (под inference_mode) как inference-тензоры, ронял longform: `RuntimeError: Inference tensors cannot be saved for backward`. Проявлялось **только** в порядке short→long на ОДНОМ инстансе модели (живой сервис); integration-тесты с отдельным инстансом на файл баг не ловили. | Короткий путь делегирует `model.transcribe` (под inference_mode); longform звал `forward`/`_decode` напрямую без контекста → смешение inference-тензоров с автоградом. Регресс-тест `tests/integration/test_short_then_long_real.py` (один движок, short→long) воспроизводит (падал до фикса) и фиксирует. |
-| 2026-06-04 (этап 06) | Деплой — **`docker-compose.yml` + Synology Container Manager UI, без `make` на проде** (требование пользователя). `make`-цели (`build-docker`/`up`/`down`/`logs`/`download-weights`) — только dev-удобство на Mac. `env_file` с `required:false` (стартует на дефолтах без `.env`). Прогрев весов — опц. compose-сервис `download-weights` (`profiles:["tools"]`) + модуль `gigaam_api/download_weights.py`; первый старт сервиса всё равно качает веса (`healthcheck start_period 600s`). | Synology UI не запускает `make`/`compose run` удобно → прод-путь должен «просто работать» из compose: первый `up` сам качает веса, `start_period` покрывает скачивание. Прогрев — для тех, кто хочет пред-скачать; не обязателен. |
+| 01 | Skeleton, tooling, logging, FastAPI skeleton `/health` | ✅ |
+| 02 | Config, ASR engine (PyTorch), short audio ≤25s, weights cache | ✅ |
+| 03 | Silero VAD + chunking + longform loop | ✅ |
+| 04 | OpenAI endpoints, schemas, formats, auth, runner | ✅ |
+| 05 | SSE streaming (`stream=true`); verbose/srt/vtt+stream → synchronous fallback | ✅ |
+| 06 | Docker (amd64, CPU-torch), compose, volume, self-hosted deployment | ✅ |
+| 07 | Optional CPU optimization: int8 flag, benchmarks, groundwork for ONNX | ⬜ optional |
 
-<!-- Новые решения добавляй новой строкой выше этой подсказки. -->
+## Architectural decisions (ADR log)
+
+> **Rule:** any new architectural decision made during development is **appended here**
+> (date · decision · reason) — to reuse experience across sessions. This is a living section.
+
+| Date | Decision | Reason |
+|---|---|---|
+| 2026-06-03 | Inference backend — **PyTorch** behind the `ASREngine` abstraction (ONNX optional, stage 07) | Full GigaAM API out of the box; one codebase for cpu/mps/cuda. |
+| 2026-06-03 | VAD for long audio — **Silero VAD** (NOT pyannote) | Lightweight, no HF_TOKEN/licenses; drops heavy dependencies; single speaker. |
+| 2026-06-03 | **Python 3.12**, package manager **uv** | torch/MPS compatibility; 3.14 too fresh. |
+| 2026-06-03 | Model — via `.env` (`MODEL`), CTC by default | CTC is faster on CPU (the target self-hosted host). |
+| 2026-06-03 | Auth — Bearer key from `.env` (`API_KEY`) | Compatible with OpenAI clients. |
+| 2026-06-03 | Weights — downloaded on first start into a volume (`MODELS_DIR`), NOT into the image | Lightweight image. |
+| 2026-06-03 | API — synchronous `transcriptions` + optional `stream=true` (SSE); endpoints `transcriptions`, `/v1/models`, `/health` | OpenAI standard; SSE against timeouts. translations/WebSocket are out of scope. |
+| 2026-06-03 | Package build — **hatchling** (editable install via `uv sync`) | `gigaam_api` is importable in pytest/mypy/uvicorn; `uvicorn gigaam_api.main:app` works reliably. |
+| 2026-06-03 | Pinning — **lower bounds (`>=`) in `pyproject.toml` + exact pins in `uv.lock`** | The uv idiom: reproducibility via the lock, deliberate upgrades via `uv lock --upgrade`. |
+| 2026-06-03 | We resolve `DEVICE=auto` **ourselves** (cuda→mps→cpu) and pass an explicit device to `load_model` (stage 02) | GigaAM's built-in auto (`device=None`) = cuda→cpu, **no MPS**; MPS is needed on the dev Mac. At stage 01 `/health.device` echoes the setting. |
+| 2026-06-03 | CSV Settings fields (`ALLOWED_MODELS`) — **`Annotated[..., NoDecode]` + `field_validator`** | pydantic-settings parses `list` as JSON by default; NoDecode + `split(",")` gives CSV. |
+| 2026-06-03 | ruff: **RUF001/002/003** (ambiguous-unicode) disabled | False positives on legitimate Cyrillic in existing comments/docstrings. |
+| 2026-06-03 | gigaam pin **`6e4b027`** verified: `torch==2.12.0`/`torchaudio==2.11.0` + `onnxruntime==1.23.2`/`onnx==1.19.1`/`numpy==2.4.6` install on **Python 3.12 macOS arm64** (dev) | Stage 02 — wheel blocker check passed; MPS available, CUDA not. |
+| 2026-06-03 | `uv add` stores the gigaam git pin in **`[tool.uv.sources]`** (`rev=6e4b027`), the dependency declared as bare `gigaam` | The uv idiom; the pin is preserved (rev + `uv.lock`), equivalent to `gigaam @ git+...@rev`. |
+| 2026-06-03 | Routing >25s: **pre-check `probe_duration`>25s → `AudioTooLongError`** + defensive catch of raw gigaam exceptions (`ValueError "too long"`→`AudioTooLongError`, `RuntimeError "failed to load audio"`→`AudioDecodeError`); others re-raised | gigaam measures length by samples, probe by seconds → near the 25s boundary they can disagree; we don't mask unrelated inference errors. |
+| 2026-06-03 | `ASREngine` extended with **`info()` + `@runtime_checkable`**; `/health` narrows the type of `app.state.engine` via `isinstance`, **without importing gigaam/torch** | The "HTTP ⟂ inference" principle: the HTTP layer stays light, `create_app()` has no torch (lazy engine import in the lifespan). |
+| 2026-06-03 | mypy: **per-module `ignore_missing_imports`** for `gigaam.*`/`silero_vad.*` | No py.typed/stubs; a targeted override is more idiomatic than a broad `# type: ignore`. |
+| 2026-06-03 | Integration sample — **committed `tests/integration/data/ru_short_sample.wav`** (11.29s, RU; name ≠ `example.wav`); test on **cpu**, graceful skip without network/weights | `.gitignore` globally ignores the throwaway `example.wav` (written by `gigaam.utils`); a separate name keeps the convention and tracks the fixture. cpu = determinism + prod CPU. |
+| 2026-06-03 (stage 03) | Silero backend — **JIT (`load_silero_vad(onnx=False)`), NOT ONNX** | One torch stack with GigaAM; onnxruntime defaults to `intra_op_num_threads=0` (all cores) → oversubscription with the torch pool on weak CPUs (e.g. ~4 cores). VAD is not the bottleneck (≈hours of inference vs minutes of VAD). Weights are bundled in the package (no network). Switching to ONNX later = 1 line. |
+| 2026-06-03 (stage 03) | **Routing inside the engine** (replaces the stage-02 row above): `probe_duration` → `>MAX_AUDIO_SECONDS`→`AudioTooLongError`; `≤25s`→short (delegate to `model.transcribe`, untouched); otherwise→`_transcribe_longform`. `ValueError "too long"` near the boundary now → **fallback to longform** (not an error) | `AudioTooLongError` removed from the normal path; the short path is not rewritten (minimal risk for the hot path); near the 25s boundary gigaam measures by samples → going to longform is more correct than failing. |
+| 2026-06-03 (stage 03) | Longform — port of `gigaam/vad_utils.py::segment_audio_file`: **pure function `merge_intervals_to_chunks` (boundaries only)** + waveform slicing/batching in the engine; intervals from Silero; inference via private `model.forward`/`model._decode`; words `+seg_start`, `round(...,3)` | The pure merge logic is tested in isolation with synthetic data (the core of the stage); we don't call upstream `transcribe_longform` (it pulls pyannote). |
+| 2026-06-03 (stage 03) | Memory: decode into an **int16 `torch.Tensor`** (`torch.frombuffer`, no numpy); the full signal goes to float **only for the VAD stage** → `del wav_f32` immediately; inference is float over the sliced batch | int16 halves memory (~1.15 GB/10h); the float peak is at VAD (≈2.3 GB/10h), not at the batches; we don't add numpy — staying in the torch stack. Lazy torch imports in `audio.py` (the module stays torch-free for the HTTP layer). |
+| 2026-06-03 (stage 03) | Longform fixture — **committed `ru_long_sample.wav`** (40s, a cut of the real GigaAM `long_example.wav` via ffmpeg, mono 16k) | Real RU speech with pauses → >1 chunk; NOT `gigaam.utils.download_long_audio()` (wget into CWD). Graceful skip without network/weights. |
+| 2026-06-03 (stage 04) | Longform cancellation on disconnect — **cooperative**: `ASREngine.transcribe` extended with optional `cancel_check: Callable[[], bool] \| None`; longform checks at the start of each batch iteration → `InferenceCancelledError`; the API sets a watcher on `request.is_disconnected()` → `threading.Event`. The short path (≤25s) is non-cancellable. | A ThreadPool task cannot be interrupted (verified) — the thread runs to completion; there is one worker → an abandoned longform blocks the queue for everyone. Real cancellation can only be cooperative. |
+| 2026-06-03 (stage 04) | Backpressure — a single key **`MAX_QUEUE=8`**; `Runner` counts admitted (queue+work), at `≥MAX_QUEUE` → `QueueFullError`→**503**. A request timeout is **NOT introduced**. | A default timeout would cut legitimate multi-hour files (RTF≥1); the "abandoned job" problem is solved by cancellation, not a crude timeout. YAGNI. |
+| 2026-06-03 (stage 04) | Error mapping — **split the cause in `audio.py`**: `FileNotFoundError` (ffmpeg/ffprobe not in PATH) → new `AudioToolNotFoundError`→**500** (`api_error`); broken/unsupported file → `AudioDecodeError`→**400** (`invalid_request_error`). `UnsupportedFormatError`/**415 removed**. | The real OpenAI returns 400 `invalid_request_error` for a bad audio file ("Unrecognized file format…" / "Audio file might be corrupted…"), it does not use 415 (verified). One code for client and server causes is wrong (root cause). |
+| 2026-06-03 (stage 04) | OpenAI specifics — `timestamp_granularities[]` via `Form(alias="timestamp_granularities[]")`+`list[str]`; verbose `seek=0` + honest per-segment `compression_ratio`; `stream=true` = synchronous response until stage 05; `/v1/models` = the whole `ALLOWED_MODELS`. | The canonical OpenAI client sends the field with `[]` (verified). `seek=0` — a safe compatible default; `compression_ratio` is cheap and meaningful. The contract is fixed in the README. |
+| 2026-06-03 (stage 04) | `compression_ratio` — **bytes/bytes** `len(b)/len(zlib.compress(b))`, `b=text.encode()` (NOT `len(text)` in characters). | Real Whisper counts bytes on both sides; for Cyrillic (2 bytes/char) a numerator in characters would halve the ratio → the hallucination threshold (>2.4) would never trigger. Caught in the stage-04 code review. |
+| 2026-06-03 (stage 04) | The disconnect watcher — **only via `anyio.create_task_group()` + `cancel_scope.cancel()`**, NOT via `asyncio.create_task` + `task.cancel()`/`await task`. The inference outcome is captured inside the group and dispatched outside (otherwise `QueueFullError` is wrapped in an `ExceptionGroup` → 500 instead of 503). | `Request.is_disconnected()` (Starlette 1.2.x) holds an `anyio.CancelScope` inside; raw-asyncio cancellation conflicts with it → the watcher never finishes, `await watcher` **deadlocks** the whole request (caught by faulthandler: event loop idle in select, the main thread waiting on the portal). Structured anyio cancellation is consistent. |
+| 2026-06-04 (stage 05) | Delta semantics — **prefix space**: the first delta = `seg0.text`, subsequent = `" "+segN.text`; `done.text=" ".join(segments)`. Invariant: `"".join(delta)==done.text==synchronous`. | The universal OpenAI streaming invariant (chat/responses/transcription, verified in the docs): concatenating deltas exactly reproduces the final text. A suffix space would leave a trailing space → mismatch with `done`/sync. |
+| 2026-06-04 (stage 05) | The "blocking `iter_segments` → async" bridge — **`asyncio.Queue` + `loop.call_soon_threadsafe`**, the producer in **`Runner.submit` (the same single worker)**, NOT a temporary thread. The queue has no `maxsize` (the producer is the bottleneck, never blocks on put). | Inference serialization is preserved (one at a time), the event loop is not blocked. `call_soon_threadsafe` is the canonical thread→loop bridge. heartbeat is done via `wait_for(queue.get(), 15s)` (cancelling your own coroutine is safe), NOT via `wait_for(__anext__())` of someone else's generator (cancelling that would kill the bridge). |
+| 2026-06-04 (stage 05) | Streaming backpressure — **`runner.try_acquire()` in the handler BEFORE `StreamingResponse`** (503 without headers); `release()` — in the **done-callback of the producer future** (the worker is actually free), not when the consumer finishes reading. `_inflight` under a `threading.Lock` (the loop and the worker thread both mutate it). | An async generator defers its body until the first iteration (after `200`) → the 503 must be sent earlier. Release on producer completion = inflight reflects worker occupancy, not client speed. |
+| 2026-06-04 (stage 05) | **Temp-file ownership is handed to the stream**: the handler sets a `streamed` flag, `finally` does NOT delete the file; `_cleanup` (the producer done-callback) deletes it once the worker has finished reading. | The handler returns `StreamingResponse` and its `finally` would fire IMMEDIATELY → deleting the file before the worker reads it (root cause). The file is needed for the whole inference. |
+| 2026-06-04 (stage 05) | Stream cancellation — **`cancel_event.set()` in the bridge generator's `finally`**; Starlette cancels the generator itself on disconnect (uvicorn HTTP `spec_version=2.3 < 2.4` → the task-group branch with `listen_for_disconnect`). We do NOT reuse the stage-04 anyio watcher. | `iter_segments` stops between batches (the same granularity as the sync path). `sse_transcription` catches `Exception` (→ error event) but lets `CancelledError`/`GeneratorExit` through (disconnect → cleanup only). |
+| 2026-06-04 (stage 05) | `verbose_json`/`srt`/`vtt` + `stream=true` → **synchronous fallback** (ignore `stream`), NOT 400. The streaming condition: `stream and fmt in {json,text}`. | Most OpenAI clients send `stream=true` by default and use `verbose_json` → a 400 would break them. Predictability is preserved: these formats always return a full response. |
+| 2026-06-04 (stage 05) | `iter_segments` — **a shared batch loop `_iter_chunks`** (+ `_prepare_longform`), reused by the sync `_transcribe_longform` (via `list(...)`). Added to the `ASREngine` Protocol → fake engines in tests implement it (runtime_checkable verifies the method exists → otherwise `/health` breaks). | A single source of longform logic (DRY); sync behaviour is unchanged. `iter_segments` for ≤25s delegates to the short path and yields its single segment. |
+| 2026-06-04 (stage 06) | CPU-torch — **`index+marker` in `pyproject.toml`** (NOT a separate step in the Dockerfile): `[[tool.uv.index]] pytorch-cpu` (`explicit=true`) + `[tool.uv.sources]` torch/torchaudio with the marker `sys_platform=='linux'`. A single `uv.lock`: Mac → `torch 2.12.0` (PyPI, MPS), Linux → `2.12.0+cpu` (the index). In the Dockerfile just `uv sync --frozen`. | The uv 2026 idiom (verified in the docs). As a side effect `uv lock` **removed the entire CUDA stack from the Linux resolution** (`nvidia-*`, `triton`, `cuda-*`) — the old lock would have pulled CUDA-torch into the image (gigabytes). Reproducibility via a single lock, without a fragile `--no-install-package` in the Dockerfile. |
+| 2026-06-04 (stage 06) | Image — **multi-stage `python:3.12-slim`**: builder (uv from a pinned `ghcr.io/astral-sh/uv` + `git` for git-gigaam, `uv sync --no-install-project` for the dependency layer → COPY code → `uv sync`) + a thin runtime (ffmpeg+ffprobe from apt, non-root **UID/GID 1000**, COPY `.venv`+`gigaam_api`). The platform is **build-time** (`docker build --platform linux/amd64`), NOT hardcoded in `FROM`. HEALTHCHECK — `python -c urllib` (no curl in slim). `XDG_CACHE_HOME=/data/models/.cache`. | **Self-contained image**: ffmpeg inside (it may be absent on the host — critical). Dependency cache layers separate from code. `--platform` not in `FROM` → multi-arch friendly + fast native validation on Mac (arm64, no qemu — verified, ~90s build). UID 1000 + chown of the volume — write permissions for non-root weights. |
+| 2026-06-04 (stage 06) | **Silero is bundled in the pip package** (`silero_vad/data/*.jit/.onnx` in site-packages) → the volume is needed **only** for GigaAM weights (`MODELS_DIR`). The project uses no HF Hub / torch.hub; `XDG_CACHE_HOME`→volume is left only as a safety net for non-root. | Verified with `find .venv` — the Silero model is in the package, no network/cache needed for VAD (consistent with the stage-03 ADR). We don't multiply unnecessary volumes/ENV. |
+| 2026-06-04 (stage 06, bugfix) | Longform inference (`_iter_chunks`: `forward`+`_decode`) is wrapped in **`torch.inference_mode()`** — like `gigaam.transcribe`/`transcribe_longform` (both `@torch.inference_mode()`). Without the wrapper autograd is on, and the encoder's rotary `cos`/`sin` cache, created by the short path (under inference_mode) as inference tensors, broke longform: `RuntimeError: Inference tensors cannot be saved for backward`. It only showed up in the order short→long on the SAME model instance (live service); integration tests with a separate instance per file did not catch it. | The short path delegates to `model.transcribe` (under inference_mode); longform called `forward`/`_decode` directly without the context → mixing inference tensors with autograd. The regression test `tests/integration/test_short_then_long_real.py` (one engine, short→long) reproduces it (failed before the fix) and locks it in. |
+| 2026-06-04 (stage 06) | Deployment — **`docker-compose.yml` + the `docker compose` CLI, no `make` in production** (user requirement). The `make` targets (`build-docker`/`up`/`down`/`logs`/`download-weights`) are dev convenience on the Mac only. `env_file` with `required:false` (starts on defaults without `.env`). Weights warm-up — an optional compose service `download-weights` (`profiles:["tools"]`) + the module `gigaam_api/download_weights.py`; the service's first start downloads the weights anyway (`healthcheck start_period 600s`). | The production path must "just work" from compose (including via a NAS UI wrapper over compose): the first `up` downloads the weights itself, `start_period` covers the download. Warm-up is for those who want to pre-download; it is not mandatory. |
+
+<!-- Append new decisions as a new row above this hint. -->
 
 
-## Критичные предостережения (root-cause, не нарушать)
+## Critical cautions (root cause, do not violate)
 
-1. **Docker на Mac НЕ видит GPU.** Контейнеры идут в Linux-VM без Metal → только CPU. MPS на Mac
-   доступен лишь при **нативном** запуске (uv), не в Docker. Прод = Synology CPU.
-2. **НЕ вызывать `model.transcribe_longform`** — он тянет pyannote. Longform делаем сами через
-   Silero VAD + порт чанкинга GigaAM (master §5.1). Нигде не должно быть `import pyannote`.
-3. **torch в Docker** — CPU-колёса (`download.pytorch.org/whl/cpu`), без CUDA. Реализовано через
-   `index+marker` в `pyproject.toml` (этап 06): Linux→`2.12.0+cpu`, Mac→`2.12.0`; единый `uv.lock`.
-   **Не возвращать** CUDA в Linux-резолв (раздул бы образ на гигабайты nvidia-пакетов).
-6. **Образ самодостаточен** — ffmpeg+ffprobe встроены (apt). **Synology ffmpeg не имеет** → хостовые
-   бинарники не использовать; всё внутри контейнера (`gigaam_api/audio.py` зовёт их из PATH образа).
-7. **Прямой вызов `model.forward`/`model._decode`** (longform, `_iter_chunks`) **обязательно** в
-   `torch.inference_mode()` — как `gigaam.transcribe`. Иначе автоград + inference-тензорный кэш rotary
-   → `RuntimeError: Inference tensors cannot be saved for backward` (баг ловится только short→long на
-   одном инстансе; тест `tests/integration/test_short_then_long_real.py`). Не убирать обёртку (важно
-   для этапа 07: новые инференс-пути — тоже под `inference_mode`).
-4. **MPS на Mac** может требовать `PYTORCH_ENABLE_MPS_FALLBACK=1` (GigaAM на MPS upstream не тестируют).
-5. **Скорость на 4 ядрах:** 10ч аудио = часы счёта; сервис батчевый, не realtime. Длинные файлы — через `stream=true`.
+1. **Docker on Mac does NOT see the GPU.** Containers run in a Linux VM without Metal → CPU only. MPS
+   on Mac is available only with a **native** run (uv), not in Docker. Production = self-hosted CPU.
+2. **Do NOT call `model.transcribe_longform`** — it pulls pyannote. We do longform ourselves via
+   Silero VAD + the ported GigaAM chunking. There must be no `import pyannote` anywhere.
+3. **torch in Docker** — CPU wheels (`download.pytorch.org/whl/cpu`), no CUDA. Implemented via
+   `index+marker` in `pyproject.toml` (stage 06): Linux→`2.12.0+cpu`, Mac→`2.12.0`; a single `uv.lock`.
+   **Do not bring back** CUDA into the Linux resolution (it would inflate the image by gigabytes of nvidia packages).
+4. **The image is self-contained** — ffmpeg+ffprobe are built in (apt). **ffmpeg may be missing on the
+   host** → do not use host binaries; everything is inside the container (`gigaam_api/audio.py` calls them from the image's PATH).
+5. **A direct call to `model.forward`/`model._decode`** (longform, `_iter_chunks`) **must** be inside
+   `torch.inference_mode()` — like `gigaam.transcribe`. Otherwise autograd + the inference-tensor rotary
+   cache → `RuntimeError: Inference tensors cannot be saved for backward` (the bug is only caught
+   short→long on a single instance; test `tests/integration/test_short_then_long_real.py`). Do not
+   remove the wrapper (important for stage 07: new inference paths must also be under `inference_mode`).
+6. **MPS on Mac** may require `PYTORCH_ENABLE_MPS_FALLBACK=1` (GigaAM on MPS is not tested upstream).
+7. **CPU speed:** 10h of audio = hours of compute; the service is batch, not realtime (min. 2 cores,
+   recommended 4). Long files — via `stream=true`.
 
-## Команды (Makefile)
+## Commands (Makefile)
 
 ```
 make install      # uv sync
-make run          # локальный запуск (uvicorn --reload)
-make download-weights-local  # прогрев весов нативно (uv, без Docker) в MODELS_DIR из .env
-make check        # ruff + ruff format --check + mypy(strict) + pytest(unit) — быстрый цикл
-make pre-commit   # ВСЯ пачка тестов всех типов подряд (check + integration). ← после КАЖДОЙ задачи, обязательно зелёный
-make test         # юнит-тесты (без integration)
-make test-integration  # реальная модель/сеть (маркер integration)
-make build-docker / up / down / logs   # этап 06 (Docker, dev-удобство)
-make download-weights  # прогрев весов через Docker (профиль tools)
+make run          # local run (uvicorn --reload)
+make download-weights-local  # warm up weights natively (uv, no Docker) into MODELS_DIR from .env
+make check        # ruff + ruff format --check + mypy(strict) + pytest(unit) — the fast loop
+make pre-commit   # the WHOLE batch of tests of all kinds in a row (check + integration). ← after EVERY task, must be green
+make test         # unit tests (no integration)
+make test-integration  # real model/network (the integration marker)
+make build-docker / up / down / logs   # stage 06 (Docker, dev convenience)
+make download-weights  # warm up weights via Docker (the tools profile)
 ```
-> `make pre-commit` — это Makefile-цель, **не инструмент pre-commit**.
+> `make pre-commit` is a Makefile target, **not the pre-commit tool**.
 
-## Конвенции
+## Conventions
 
-- **Общение в проекте — на русском**; код/идентификаторы — английские (докстринги можно по-русски).
-- **mypy strict**, **TDD** (тест → код), чистые функции для `formats`/VAD-чанкинга.
-- **Тестируем прагматично, без оверинженеринга:** покрываем рисковую/ключевую логику и happy-path,
-  не пишем тесты ради тестов и не гонимся за процентом покрытия.
-- **YAGNI:** не пишем код «на всякий случай»; **удаляем неиспользуемый/мёртвый код сразу**
-  (без закомментированных кусков). Осознанное исключение — абстракция `ASREngine` под ONNX.
-- Никаких сетевых вызовов в импортах модулей; скачивание весов — только в lifespan.
-- Логирование — stdlib `logging`, уровень из `LOG_LEVEL`; debug-логи в ключевых точках (master §8).
-- **`CLAUDE.md` и `README.md` держим всегда актуальными:** изменилось поведение/команды/API/конфиг —
-  правим оба в той же задаче. Новые архитектурные решения — в раздел «Архитектурные решения» выше.
-- **После каждой задачи** и в конце каждого этапа — зелёный `make pre-commit` + обновлённый трекер.
-- **Не коммитить без явной просьбы пользователя.**
+- **mypy strict**, **TDD** (test → code), pure functions for `formats`/VAD chunking.
+- **Test pragmatically, no over-engineering:** cover risky/key logic and the happy path,
+  don't write tests for the sake of tests and don't chase coverage percentages.
+- **YAGNI:** don't write code "just in case"; **delete unused/dead code immediately**
+  (no commented-out blocks). The deliberate exception is the `ASREngine` abstraction for ONNX.
+- No network calls in module imports; weights download — only in the lifespan.
+- Logging — stdlib `logging`, level from `LOG_LEVEL`; debug logs at key points.
+- **Keep `CLAUDE.md` and the README files always current:** if behaviour/commands/API/config
+  change — update them in the same task. New architectural decisions — in the "Architectural decisions" section above.
+- **After every task** and at the end of every stage — a green `make pre-commit` + an updated stage tracker (the "Status" section).
+- **Do not commit without an explicit user request.**
 
-## Изучение GigaAM
+## GigaAM reference
 
-Склонированный репозиторий для изучения — в `tmp/GigaAM/` (не зависимость; зависимость ставится
-из git, см. master §9). Полезные файлы для справки: `gigaam/model.py`, `gigaam/vad_utils.py`
-(алгоритм чанкинга для порта), `gigaam/decoding.py`, `gigaam/__init__.py` (загрузка/кэш весов).
+[GigaAM](https://github.com/salute-developers/GigaAM) is the upstream Russian-ASR model/library this
+service wraps — installed as a git-pinned dependency (rev `6e4b027` in `[tool.uv.sources]`,
+`pyproject.toml`), not vendored. We reuse its inference (`model.transcribe`, `forward`/`_decode`) and
+port its VAD chunking. Key source files for reference:
+[`gigaam/model.py`](https://github.com/salute-developers/GigaAM/blob/6e4b027/gigaam/model.py),
+[`gigaam/vad_utils.py`](https://github.com/salute-developers/GigaAM/blob/6e4b027/gigaam/vad_utils.py)
+(chunking algorithm), `gigaam/decoding.py`, `gigaam/__init__.py` (weights loading/cache).
