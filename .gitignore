@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Виртуальные окружения
+.venv/
+venv/
+
+# Кэши инструментов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Секреты и окружение
+.env
+.env.*
+!.env.example
+
+# Веса моделей (скачиваются в смонтированный volume, не коммитятся)
+models/
+/data/models/
+*.ckpt
+*.onnx
+
+# Тестовые аудио-артефакты
+example.wav
+long_example.wav
+*.tmp.wav
+
+# Склонированный для изучения GigaAM (не часть проекта)
+tmp/
+
+# ОС / IDE
+.DS_Store
+.idea/
+.vscode/
