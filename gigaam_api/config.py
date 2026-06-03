@@ -1,6 +1,6 @@
 """Конфигурация сервиса (pydantic-settings). Единственный источник настроек — `.env`.
 
-Все переменные и их назначение описаны в docs/specs/00-master.md §7.
+Полный справочник переменных — в README (раздел «Конфигурация»).
 """
 
 from functools import lru_cache
@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Настройки приложения. Имена полей совпадают с переменными окружения (master §7)."""
+    """Настройки приложения. Имена полей совпадают с переменными окружения."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

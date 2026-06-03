@@ -1,6 +1,6 @@
 """Чистые функции рендера ASRResult в OpenAI-форматы. Не знают про HTTP/модель.
 
-Недоступные у GigaAM поля verbose_json заполняются best-effort (master §6.3):
+Недоступные у GigaAM поля verbose_json заполняются best-effort:
 tokens=[], temperature/avg_logprob/no_speech_prob=0.0, seek=0; compression_ratio
 считается честно (дёшево). Формат времени: SRT — запятая, VTT — точка.
 """

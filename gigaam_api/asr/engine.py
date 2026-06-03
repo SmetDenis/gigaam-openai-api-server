@@ -1,7 +1,7 @@
 """Контракт ASR-движка: типы результата, Protocol и engine-level исключения.
 
 Типы намеренно не зависят от gigaam — HTTP- и format-слой импортируют их, не зная
-про конкретный backend инференса (см. docs/specs/00-master.md §4.3, D3).
+про конкретный backend инференса.
 """
 
 from collections.abc import Callable, Iterator

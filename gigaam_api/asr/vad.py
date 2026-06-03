@@ -2,7 +2,7 @@
 
 `merge_intervals_to_chunks` — чистая функция, дословный порт логики слияния из
 gigaam/vad_utils.py::segment_audio_file (_update_segments + цикл). Меняем только
-источник речевых интервалов: pyannote → Silero (см. docs/specs/00-master.md §5.1).
+источник речевых интервалов: pyannote → Silero.
 
 Импорты silero/torch — ленивые (внутри функций), чтобы импорт модуля ради чистой
 функции чанкинга не тянул тяжёлый стек. Веса Silero бандлятся в пакете (без сети).
@@ -24,7 +24,7 @@ def load_vad() -> object:
 
     Возвращаем непрозрачный handle (передаётся в `speech_intervals`); JIT-стек
     тот же, что у GigaAM (torch) — без onnxruntime, чтобы не плодить пулы потоков
-    на 4 ядрах Synology (см. ADR в CLAUDE.md).
+    на слабых CPU (напр. ~4 ядра; см. ADR в CLAUDE.md).
     """
     from silero_vad import load_silero_vad
 
@@ -36,8 +36,8 @@ def speech_intervals(
 ) -> list[tuple[float, float]]:
     """Вернуть речевые интервалы `(start, end)` в секундах через Silero.
 
-    `wav` — float32 mono 16kHz (весь сигнал; пик памяти на этой стадии, см. master
-    §11). Формат идентичен pyannote: список `(start, end)` секунд.
+    `wav` — float32 mono 16kHz (весь сигнал; пик памяти на этой стадии).
+    Формат идентичен pyannote: список `(start, end)` секунд.
     """
     from silero_vad import get_speech_timestamps
 

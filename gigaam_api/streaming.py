@@ -1,4 +1,4 @@
-"""Сборка SSE-событий для `stream=true` (master §6.4, спек 05).
+"""Сборка SSE-событий для `stream=true`.
 
 Контракт (проверен против OpenAI Speech-to-text, 06.2026):
 - на каждый сегмент → `{"type":"transcript.text.delta","delta":"<text>"}`;
@@ -25,7 +25,7 @@ from gigaam_api.runner import Runner
 logger = logging.getLogger(__name__)
 
 # Интервал heartbeat'а: на медленном CPU один батч считается минутами без событий —
-# периодический SSE-комментарий держит соединение против idle-таймаутов прокси (спек 05).
+# периодический SSE-комментарий держит соединение против idle-таймаутов прокси.
 STREAM_HEARTBEAT_SECONDS = 15.0
 
 _HEARTBEAT_COMMENT = (

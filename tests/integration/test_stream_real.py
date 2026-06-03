@@ -1,8 +1,8 @@
 """Интеграция: SSE-стрим на реальной модели v3_ctc + длинный сэмпл (~40с).
 
 End-to-end через HTTP: POST stream=true → собираем SSE-события → склеенный текст из
-`transcript.text.done` обязан совпасть с синхронным `transcribe` на том же файле
-(acceptance §05). DEVICE=cpu — детерминизм greedy-декода. Грейсфул-skip без сети/весов.
+`transcript.text.done` обязан совпасть с синхронным `transcribe` на том же файле.
+DEVICE=cpu — детерминизм greedy-декода. Грейсфул-skip без сети/весов.
 """
 
 import json

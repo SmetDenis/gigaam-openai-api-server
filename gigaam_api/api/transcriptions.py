@@ -1,9 +1,9 @@
 """POST /v1/audio/transcriptions — OpenAI-совместимый эндпоинт (sync + SSE-стриминг).
 
-Upload пишем на диск чанками (master §11: не грузить весь файл в RAM); инференс —
+Upload пишем на диск чанками (не грузить весь файл в RAM); инференс —
 через Runner (сериализация + backpressure).
 
-Две ветки (спек 05):
+Две ветки:
 - `stream=true` И формат ∈ {json,text} → SSE: сегменты по мере готовности (delta) →
   done → [DONE]. backpressure (try_acquire→503) проверяется ДО StreamingResponse;
   владение temp-файлом передаётся стриму (cleanup в on_done, когда воркер свободен).

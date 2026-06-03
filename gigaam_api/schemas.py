@@ -18,7 +18,7 @@ class VerboseWord(BaseModel):
 
 
 class VerboseSegment(BaseModel):
-    """Сегмент в `verbose_json`. Недоступные у GigaAM поля — best-effort (master §6.3)."""
+    """Сегмент в `verbose_json`. Недоступные у GigaAM поля — best-effort."""
 
     id: int
     seek: int
@@ -44,7 +44,7 @@ class VerboseTranscription(BaseModel):
 
 
 class ModelObject(BaseModel):
-    """Элемент `GET /v1/models` (master §6.5)."""
+    """Элемент `GET /v1/models`."""
 
     id: str
     object: str = "model"

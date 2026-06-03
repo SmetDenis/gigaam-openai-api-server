@@ -5,7 +5,7 @@
 сам через `decode_to_int16_16k_mono` (int16 экономит память на длинных файлах).
 
 torch импортируется **лениво** внутри `decode_to_int16_16k_mono`: модуль остаётся
-torch-free, чтобы импорт audio.py из HTTP-слоя не тянул torch (master §4.3).
+torch-free, чтобы импорт audio.py из HTTP-слоя не тянул torch.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def decode_to_int16_16k_mono(path: str) -> Tensor:
     Как gigaam `load_audio`, но возвращаем int16 (а не float): на длинных файлах это
     вдвое экономит память (~1.15 ГБ/10ч против 2.3 ГБ во float). Во float конвертируем
     срез-по-чанку при батчинге. Тензор read-only (делит память с буфером ffmpeg) —
-    инференс делает копии (`.float()`), сам буфер не мутируем. См. master §11.
+    инференс делает копии (`.float()`), сам буфер не мутируем.
     """
     import torch
 

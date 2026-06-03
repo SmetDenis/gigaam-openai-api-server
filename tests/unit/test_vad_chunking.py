@@ -12,7 +12,7 @@ import pytest
 
 from gigaam_api.asr.vad import merge_intervals_to_chunks
 
-# Параметры по умолчанию (master §5.1 / config).
+# Параметры по умолчанию (из config).
 _PARAMS = {
     "min_duration": 15.0,
     "max_duration": 22.0,

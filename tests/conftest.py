@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-# Все переменные окружения, которые читает Settings (master §7).
+# Все переменные окружения, которые читает Settings.
 _SETTINGS_ENV_VARS = (
     "MODEL",
     "DEVICE",

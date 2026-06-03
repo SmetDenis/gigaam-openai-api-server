@@ -1,11 +1,11 @@
 """PyTorch-реализация ASREngine поверх gigaam.load_model (short + longform).
 
 Резолв device (`auto`→cuda→mps→cpu) делаем сами: встроенный `auto` gigaam знает
-только cuda→cpu, без MPS (docs/specs/00-master.md, ADR).
+только cuda→cpu, без MPS.
 
 Роутинг по длительности внутри движка: ≤25с — короткий путь (делегируем
 `model.transcribe`); иначе — собственный longform-цикл (Silero VAD + чанкинг +
-батчевый `model.forward`/`model._decode`), без pyannote (master §5.1).
+батчевый `model.forward`/`model._decode`), без pyannote.
 """
 
 import logging
@@ -70,7 +70,7 @@ class GigaAMEngine:
         if self.device == "mps":
             logger.warning(
                 "DEVICE=mps: при ошибках MPS установите PYTORCH_ENABLE_MPS_FALLBACK=1 "
-                "(GigaAM на MPS upstream не тестируют; см. master §12)"
+                "(GigaAM на MPS upstream не тестируют)"
             )
         if settings.QUANTIZE_INT8:
             logger.warning("QUANTIZE_INT8=true игнорируется: int8 будет реализован на этапе 07")
@@ -125,7 +125,7 @@ class GigaAMEngine:
         word_timestamps: bool,
         cancel_check: Callable[[], bool] | None = None,
     ) -> Iterator[SegmentTS]:
-        """Сегменты по мере готовности (для SSE-стриминга, спек 05).
+        """Сегменты по мере готовности (для SSE-стриминга).
 
         Роутинг как в `transcribe`: ≤25с — один сегмент (делегируем короткому пути);
         иначе — longform-чанки, каждый yield'ится сразу после декода своего батча.
@@ -206,7 +206,7 @@ class GigaAMEngine:
     def _prepare_longform(self, wav_path: str) -> tuple[Tensor, float, list[tuple[float, float]]]:
         """Декод int16 + Silero VAD + чанкинг. Возвращает (int16-сигнал, длительность, границы).
 
-        Пик памяти (master §11) — на VAD-стадии (весь сигнал во float); освобождаем сразу.
+        Пик памяти — на VAD-стадии (весь сигнал во float); освобождаем сразу.
         """
         int16 = decode_to_int16_16k_mono(wav_path)
         duration = int16.numel() / SAMPLE_RATE

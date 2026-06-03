@@ -1,4 +1,4 @@
-"""Тесты конфигурации Settings (master §7)."""
+"""Тесты конфигурации Settings."""
 
 import pytest
 from pydantic import ValidationError
