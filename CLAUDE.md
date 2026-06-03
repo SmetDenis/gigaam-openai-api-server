@@ -18,12 +18,16 @@
 
 ## Статус
 
-Этап **03 ✅** (longform >25с: Silero VAD (JIT) → чистая функция чанкинга `merge_intervals_to_chunks`
-(порт из gigaam) → батчевый `model.forward`/`model._decode`; роутинг по длительности внутри движка;
-int16-декод для экономии памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`,
-короткие аудио ≤25с, загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`).
-Этап **01 ✅** (каркас, тулинг, логирование, FastAPI-скелет). Следующий — `04` (OpenAI-эндпоинты,
-schemas, formats, auth, runner). Актуальный трекер — в `00-master.md` §13.
+Этап **04 ✅** (OpenAI-совместимый API: `POST /v1/audio/transcriptions` все форматы
+`json`/`text`/`verbose_json`/`srt`/`vtt`, `GET /v1/models`, Bearer-auth, OpenAI-формат ошибок;
+`Runner` (1 воркер + `MAX_QUEUE`→503); кооперативная отмена longform по disconnect через **anyio
+task group**; upload чанками→413; probe-лимит→400). Этап **03 ✅** (longform >25с: Silero VAD (JIT)
+→ чистая функция чанкинга `merge_intervals_to_chunks` (порт из gigaam) → батчевый
+`model.forward`/`model._decode`; роутинг по длительности внутри движка; int16-декод для экономии
+памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с,
+загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас,
+тулинг, логирование, FastAPI-скелет). Следующий — `05` (SSE-стриминг, `stream=true`).
+Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
 
@@ -56,6 +60,12 @@ schemas, formats, auth, runner). Актуальный трекер — в `00-ma
 | 2026-06-03 (этап 03) | Longform — порт `gigaam/vad_utils.py::segment_audio_file`: **чистая функция `merge_intervals_to_chunks` (только границы)** + срез waveform/батчинг в engine; интервалы от Silero; инференс через приватные `model.forward`/`model._decode` (master §5.1); слова `+seg_start`, `round(...,3)` | Чистую логику слияния тестируем синтетикой изолированно (ядро этапа); `transcribe_longform` upstream не зовём (он тянет pyannote). |
 | 2026-06-03 (этап 03) | Память: декод в **int16 `torch.Tensor`** (`torch.frombuffer`, без numpy); весь сигнал во float **только на VAD-стадию** → `del wav_f32` сразу; инференс — float по срезу-батчу | int16 вдвое экономит память (~1.15 ГБ/10ч); пик float — на VAD (≈2.3 ГБ/10ч), не на батчах; numpy не добавляем — остаёмся в torch-стеке. Ленивые импорты torch в `audio.py` (модуль остаётся torch-free для HTTP-слоя). |
 | 2026-06-03 (этап 03) | Longform-фикстура — **committed `ru_long_sample.wav`** (40с, обрезка реального GigaAM `long_example.wav` через ffmpeg, mono 16k) | Реальная RU-речь с паузами → >1 чанк; НЕ `gigaam.utils.download_long_audio()` (wget в CWD). Грейсфул-skip без сети/весов. |
+| 2026-06-03 (этап 04) | Отмена longform при disconnect — **кооперативная**: `ASREngine.transcribe` расширен опц. `cancel_check: Callable[[], bool] \| None`; longform проверяет в начале каждой итерации батча → `InferenceCancelledError`; API ставит watcher на `request.is_disconnected()` → `threading.Event`. Short-путь (≤25с) неотменяем. | ThreadPool-задачу прервать нельзя (проверено) — поток досчитает; воркер один → брошенный longform блокирует очередь для всех. Реальная отмена только кооперативная. |
+| 2026-06-03 (этап 04) | Backpressure — один ключ **`MAX_QUEUE=8`**; `Runner` считает admitted (очередь+работа), при `≥MAX_QUEUE` → `QueueFullError`→**503**. Таймаут запроса **НЕ вводим**. | Дефолтный таймаут рубил бы легитимные многочасовые файлы (RTF≥1); «брошенное задание» решается отменой, а не грубым таймаутом. YAGNI. |
+| 2026-06-03 (этап 04) | Маппинг ошибок — **разделить причину в `audio.py`**: `FileNotFoundError` (ffmpeg/ffprobe не в PATH) → новое `AudioToolNotFoundError`→**500** (`api_error`); битый/неподдерживаемый файл → `AudioDecodeError`→**400** (`invalid_request_error`). `UnsupportedFormatError`/**415 выкинуты**. | Реальный OpenAI на плохой аудиофайл отдаёт 400 `invalid_request_error` («Unrecognized file format…» / «Audio file might be corrupted…»), 415 не использует (проверено). Один код для клиентской и серверной причин — неверен (root-cause). |
+| 2026-06-03 (этап 04) | OpenAI-уточнения — `timestamp_granularities[]` через `Form(alias="timestamp_granularities[]")`+`list[str]`; verbose `seek=0` + честный per-segment `compression_ratio`; `stream=true`=синхронный ответ до этапа 05; `/v1/models`=весь `ALLOWED_MODELS`. | Канонический OpenAI-клиент шлёт поле с `[]` (проверено). `seek=0` — безопасный совместимый дефолт; `compression_ratio` дёшев и осмысленен. Контракт фиксируется в README. |
+| 2026-06-03 (этап 04) | `compression_ratio` — **байты/байты** `len(b)/len(zlib.compress(b))`, `b=text.encode()` (НЕ `len(text)` в символах). | Реальный Whisper считает байты с обеих сторон; для кириллицы (2 байта/символ) числитель в символах занижал бы ratio вдвое → порог галлюцинаций (>2.4) не сработал бы. Поймано на код-ревью этапа 04. |
+| 2026-06-03 (этап 04) | Watcher disconnect'а — **только через `anyio.create_task_group()` + `cancel_scope.cancel()`**, НЕ через `asyncio.create_task` + `task.cancel()`/`await task`. Исход инференса захватываем внутри группы и диспетчеризуем снаружи (иначе `QueueFullError` обернётся в `ExceptionGroup` → 500 вместо 503). | `Request.is_disconnected()` (Starlette 1.2.x) внутри держит `anyio.CancelScope`; raw-asyncio отмена с ней конфликтует → watcher не завершается, `await watcher` **дедлочит** весь запрос (поймано faulthandler'ом: event loop idle в select, главный поток ждёт portal). Структурная anyio-отмена консистентна. |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 

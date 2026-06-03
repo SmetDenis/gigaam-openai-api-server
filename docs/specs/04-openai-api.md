@@ -8,11 +8,53 @@
 один запрос → полный транскрипт), `GET /v1/models`, Bearer-аутентификацию, OpenAI-формат
 ошибок, рендер всех форматов (`json`/`text`/`verbose_json`/`srt`/`vtt`) и сериализацию
 инференса через `Runner` (1 воркер). Стриминг (`stream=true`) — на этапе 05; здесь поле
-принимается, но обрабатывается синхронно (или 400, если решим строго — см. задачи).
+принимается, но обрабатывается **синхронно** (решение зафиксировано в U4 ниже).
 
 ## Предусловия
 - Завершены этапы 02 и 03 (engine: short + longform; `app.state.engine`).
 - Прочитан master §6 (маппинг запрос/ответ, ошибки), §7 (конфиг), §10 (тесты).
+
+## Уточнения по итогам верификации плана (2026-06-03)
+
+> Зафиксированы после ресёрча OpenAI-совместимости и обсуждения. **Переопределяют** отдельные
+> пункты раздела «Задачи» ниже (явно указано, какие). Полное обоснование — в ADR-логе `CLAUDE.md`.
+
+**U1 (уточняет задачу 1) — кооперативная отмена longform.** ThreadPool-задачу прервать нельзя
+(проверено: поток досчитает). Воркер один → брошенный многочасовой longform блокирует очередь для
+всех. Поэтому:
+- Контракт движка расширяем: `ASREngine.transcribe(wav_path, *, word_timestamps, cancel_check: Callable[[], bool] | None = None)`.
+  Новое исключение `InferenceCancelledError` в `asr/engine.py`.
+- `GigaAMEngine._transcribe_longform` проверяет `cancel_check()` **в начале каждой итерации батча**
+  → при `True` бросает `InferenceCancelledError`. Short-путь (≤25с) **неотменяем** (терпимо).
+- В `transcriptions.py`: async-watcher опрашивает `request.is_disconnected()` (~1с) → ставит
+  `threading.Event`; `cancel_check=event.is_set` прокидывается через `runner.run`. Watcher гасится в
+  `finally`. Пойманное `InferenceCancelledError` → лог + `Response(status_code=499)` (клиент уже отвалился).
+
+**U2 (уточняет задачу 1) — лимит очереди.** Новый конфиг **`MAX_QUEUE: int = 8`** (добавлен в master §7,
+синхронизировать `.env.example` и conftest `_SETTINGS_ENV_VARS`). `Runner` считает admitted (в очереди +
+в работе); при `≥ MAX_QUEUE` → `QueueFullError` → **503** (до постановки в executor). **Таймаут запроса
+НЕ вводим** (рубил бы легитимные многочасовые файлы; «брошенное задание» решает U1).
+
+**U3 (переопределяет задачу 3) — маппинг ошибок, разделение причины.** Правим `audio.py` (root-cause):
+- `FileNotFoundError` (ffmpeg/ffprobe не в PATH) → новое `AudioToolNotFoundError` → **500** (`type=api_error`).
+- битый/неподдерживаемый файл (`CalledProcessError`, плохая длительность) → `AudioDecodeError` → **400**
+  (`type=invalid_request_error`) — как реальный OpenAI («Unrecognized file format…» / «Audio file might
+  be corrupted or unsupported»).
+- **`UnsupportedFormatError` и код 415 НЕ вводим** — OpenAI их не использует (проверено). Из списка
+  кастомных исключений задачи 3 `UnsupportedFormatError` исключается; добавляется `AudioToolNotFoundError`
+  и `QueueFullError` (503).
+
+**U4 (уточняет задачи 4–7) — OpenAI-детали:**
+- `verbose_json`: `seek=0` для всех сегментов (безопасный совместимый дефолт); `compression_ratio` —
+  честно per-segment `len(b)/len(zlib.compress(b))`, где `b=t.encode()` (байты/байты, как Whisper; `len(t)` в символах занизил бы кириллицу вдвое), с guard на пустой текст.
+- `timestamp_granularities[]` принимаем через `Form(alias="timestamp_granularities[]")` + `list[str] | None`
+  (канонический OpenAI-клиент шлёт поле именно с `[]` — проверено).
+- `stream=true` → **синхронный ответ** (НЕ 400); TODO-якорь на этап 05.
+- `GET /v1/models` → список **всего `ALLOWED_MODELS`** (каждая модель как объект), не только загруженной.
+- media-type: `srt` → `text/plain; charset=utf-8`, `vtt` → `text/vtt; charset=utf-8`.
+
+**U5 — доп. тест-файл:** сверх списка ниже добавляется `tests/unit/test_runner.py` (сериализация «1 за раз»,
+`QueueFullError` при переполнении, корректный возврат результата, `shutdown`).
 
 ## Артефакты
 ```
@@ -29,6 +71,7 @@ tests/unit/test_auth.py
 tests/unit/test_errors.py
 tests/unit/test_transcriptions_api.py  # с моком engine через app.state
 tests/unit/test_models_api.py
+tests/unit/test_runner.py              # сериализация + QueueFullError + shutdown (см. U5)
 ```
 
 ## Задачи
@@ -45,9 +88,10 @@ tests/unit/test_models_api.py
    сравнивает с `settings.API_KEY`. Если `API_KEY` пуст → auth выключен (пропускать). Иначе при
    отсутствии/несовпадении → 401 в OpenAI-формате. Сравнение — `secrets.compare_digest`.
 3. **`errors.py`**: модель `OpenAIError` (`{"error":{message,type,param,code}}`); собственные
-   исключения (`AudioDecodeError`, `AudioTooLongError`, `UnsupportedFormatError`, `PayloadTooLargeError`)
-   → exception handlers с корректным HTTP-кодом (см. master §6.6). Хендлер для `RequestValidationError`
-   → 400 в OpenAI-формате.
+   исключения → exception handlers с корректным HTTP-кодом. **Список переопределён в U3** (см. выше):
+   `AudioDecodeError`→400, `AudioTooLongError`→400, `PayloadTooLargeError`→413,
+   `AudioToolNotFoundError`→500, `QueueFullError`→503; **без `UnsupportedFormatError`/415**. Хендлер для
+   `RequestValidationError` → 400 в OpenAI-формате; catch-all `Exception` → 500 (`logger.exception`).
 4. **`schemas.py`**: Pydantic-модели ответа:
    - `TranscriptionJSON` (`text`);
    - `VerboseSegment` (`id, seek, start, end, text, tokens, temperature, avg_logprob, compression_ratio, no_speech_prob`);
@@ -59,7 +103,7 @@ tests/unit/test_models_api.py
    - `to_text(result) -> str`;
    - `to_verbose_json(result, *, granularities: set[str]) -> dict` — заполнить недоступные поля
      best-effort (master §6.3): `tokens=[]`, `temperature=0.0`, `avg_logprob=0.0`, `no_speech_prob=0.0`,
-     а `compression_ratio` считать честно `len(text)/len(zlib.compress(text.encode()))` (проверено, дёшево);
+     а `compression_ratio` считать честно `len(b)/len(zlib.compress(b))`, `b=text.encode()` (байты/байты, как Whisper; дёшево);
      `segments`/`words` включать по `granularities`;
    - `to_srt(result) -> str`, `to_vtt(result) -> str` — из `result.segments`:
      - SRT: `index`, строка `HH:MM:SS,mmm --> HH:MM:SS,mmm`, текст, пустая строка;
@@ -108,7 +152,7 @@ tests/unit/test_models_api.py
 ## Acceptance-критерии
 - [ ] `POST /v1/audio/transcriptions` работает для всех `response_format`; ответы соответствуют master §6.
 - [ ] Bearer-auth: при заданном `API_KEY` — 401 без/с неверным ключом; открыт при пустом ключе.
-- [ ] Ошибки — в OpenAI-формате с верными кодами (400/401/413/415/500).
+- [ ] Ошибки — в OpenAI-формате с верными кодами (400/401/413/500/503; **415 не используется**, см. U3).
 - [ ] `prompt`/`temperature` принимаются и игнорируются; задокументировано.
 - [ ] Инференс сериализован через `Runner` (не более одного одновременно), loop не блокируется.
 - [ ] `GET /v1/models` отдаёт ожидаемый список.

@@ -4,6 +4,7 @@
 про конкретный backend инференса (см. docs/specs/00-master.md §4.3, D3).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, runtime_checkable
 
@@ -48,7 +49,11 @@ class ASRResult:
 
 
 class AudioTooLongError(Exception):
-    """Аудио длиннее порога короткого пути (25с). Longform появится на этапе 03."""
+    """Аудио длиннее лимита MAX_AUDIO_SECONDS (longform-порог 25с обрабатывается внутри движка)."""
+
+
+class InferenceCancelledError(Exception):
+    """Инференс прерван по запросу (клиент отключился между батчами longform)."""
 
 
 @runtime_checkable
@@ -63,6 +68,12 @@ class ASREngine(Protocol):
     model_name: str
     device: str
 
-    def transcribe(self, wav_path: str, *, word_timestamps: bool) -> ASRResult: ...
+    def transcribe(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ASRResult: ...
 
     def info(self) -> EngineInfo: ...

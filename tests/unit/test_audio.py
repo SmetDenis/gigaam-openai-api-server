@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from gigaam_api.audio import AudioDecodeError, decode_to_int16_16k_mono, probe_duration
+from gigaam_api.audio import (
+    AudioDecodeError,
+    AudioToolNotFoundError,
+    decode_to_int16_16k_mono,
+    probe_duration,
+)
 
 
 def _write_silence_wav(
@@ -37,7 +42,7 @@ def test_probe_duration_raises_on_corrupt_input(tmp_path: Path) -> None:
         probe_duration(str(bad))
 
 
-def test_probe_duration_raises_on_missing_file(tmp_path: Path) -> None:
+def test_probe_duration_raises_on_missing_audio_file(tmp_path: Path) -> None:
     with pytest.raises(AudioDecodeError):
         probe_duration(str(tmp_path / "does-not-exist.wav"))
 
@@ -61,6 +66,32 @@ def test_decode_raises_on_corrupt_input(tmp_path: Path) -> None:
         decode_to_int16_16k_mono(str(bad))
 
 
-def test_decode_raises_on_missing_file(tmp_path: Path) -> None:
+def test_decode_raises_on_missing_audio_file(tmp_path: Path) -> None:
     with pytest.raises(AudioDecodeError):
         decode_to_int16_16k_mono(str(tmp_path / "does-not-exist.wav"))
+
+
+def test_probe_duration_tool_missing_raises_tool_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    def _no_ffprobe(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr(subprocess, "run", _no_ffprobe)
+    with pytest.raises(AudioToolNotFoundError):
+        probe_duration("/tmp/x.wav")
+
+
+def test_probe_duration_bad_input_raises_decode_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    def _broken(*args: object, **kwargs: object) -> object:
+        raise subprocess.CalledProcessError(returncode=1, cmd="ffprobe")
+
+    monkeypatch.setattr(subprocess, "run", _broken)
+    with pytest.raises(AudioDecodeError):
+        probe_duration("/tmp/x.wav")

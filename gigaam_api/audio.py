@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class AudioDecodeError(Exception):
-    """Не удалось прочитать/декодировать аудио (ffprobe/ffmpeg-сбой, битый файл)."""
+    """Не удалось прочитать/декодировать аудио (битый/неподдерживаемый файл)."""
+
+
+class AudioToolNotFoundError(Exception):
+    """ffprobe/ffmpeg не найден в PATH — серверная проблема окружения (→ 500)."""
 
 
 def probe_duration(path: str) -> float:
@@ -45,7 +49,7 @@ def probe_duration(path: str) -> float:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except FileNotFoundError as exc:
-        raise AudioDecodeError("ffprobe не найден в PATH") from exc
+        raise AudioToolNotFoundError("ffprobe не найден в PATH") from exc
     except subprocess.CalledProcessError as exc:
         logger.warning("ffprobe не смог прочитать аудио: %s", path)
         raise AudioDecodeError(f"не удалось прочитать аудио: {path}") from exc
@@ -90,7 +94,7 @@ def decode_to_int16_16k_mono(path: str) -> Tensor:
     try:
         raw = subprocess.run(cmd, capture_output=True, check=True).stdout
     except FileNotFoundError as exc:
-        raise AudioDecodeError("ffmpeg не найден в PATH") from exc
+        raise AudioToolNotFoundError("ffmpeg не найден в PATH") from exc
     except subprocess.CalledProcessError as exc:
         logger.warning("ffmpeg не смог декодировать аудио: %s", path)
         raise AudioDecodeError(f"не удалось декодировать аудио: {path}") from exc

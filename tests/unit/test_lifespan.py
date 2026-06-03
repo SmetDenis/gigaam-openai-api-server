@@ -11,6 +11,7 @@ import gigaam_api.asr.gigaam_engine as ge
 from gigaam_api.asr.engine import ASRResult, EngineInfo
 from gigaam_api.config import Settings
 from gigaam_api.main import create_app
+from gigaam_api.runner import Runner
 
 
 class _FakeEngine:
@@ -31,10 +32,12 @@ def test_lifespan_loads_engine_and_releases(monkeypatch: pytest.MonkeyPatch) -> 
 
     with TestClient(app) as client:
         assert isinstance(app.state.engine, _FakeEngine)
+        assert isinstance(app.state.runner, Runner)
         assert client.get("/health").json()["loaded"] is True
 
-    # shutdown освободил движок
+    # shutdown освободил движок и runner
     assert app.state.engine is None
+    assert app.state.runner is None
 
 
 def test_lifespan_fail_fast_on_load_error(monkeypatch: pytest.MonkeyPatch) -> None:

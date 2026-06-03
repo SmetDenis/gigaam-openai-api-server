@@ -14,7 +14,7 @@ import pytest
 import torch
 
 import gigaam_api.asr.gigaam_engine as gigaam_engine
-from gigaam_api.asr.engine import ASRResult, AudioTooLongError, WordTS
+from gigaam_api.asr.engine import ASRResult, AudioTooLongError, InferenceCancelledError, WordTS
 from gigaam_api.asr.gigaam_engine import GigaAMEngine, _collate
 from gigaam_api.config import Settings
 
@@ -223,6 +223,38 @@ def test_transcribe_raises_when_exceeding_max_audio_seconds(
 
     with pytest.raises(AudioTooLongError):
         eng.transcribe("x.wav", word_timestamps=False)
+
+
+def test_longform_cancels_between_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(MODEL="v3_ctc", BATCH_SIZE=1)
+    model = _FakeASRModel([("раз", None)])  # хватит на один обработанный батч
+    eng = _bare_engine(settings, model)
+    monkeypatch.setattr(
+        gigaam_engine,
+        "decode_to_int16_16k_mono",
+        lambda path: torch.zeros(60 * 16000, dtype=torch.int16),
+    )
+    monkeypatch.setattr(
+        gigaam_engine,
+        "speech_intervals",
+        lambda wav, vad, *, threshold: [(0.0, 18.0), (19.0, 37.0), (38.0, 56.0)],
+    )
+
+    class _CancelAfter:
+        """cancel_check, возвращающий True начиная с (after+1)-го вызова."""
+
+        def __init__(self, after: int) -> None:
+            self.calls = 0
+            self.after = after
+
+        def __call__(self) -> bool:
+            self.calls += 1
+            return self.calls > self.after
+
+    with pytest.raises(InferenceCancelledError):
+        eng._transcribe_longform("x.wav", word_timestamps=False, cancel_check=_CancelAfter(1))
+
+    assert model.forward_calls == 1  # успел только первый батч
 
 
 def test_transcribe_too_long_valueerror_falls_back_to_longform(

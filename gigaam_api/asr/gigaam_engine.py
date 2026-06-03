@@ -10,6 +10,7 @@
 
 import logging
 import time
+from collections.abc import Callable
 from itertools import islice
 
 import gigaam
@@ -20,6 +21,7 @@ from gigaam_api.asr.engine import (
     ASRResult,
     AudioTooLongError,
     EngineInfo,
+    InferenceCancelledError,
     SegmentTS,
     WordTS,
 )
@@ -89,7 +91,13 @@ class GigaAMEngine:
             time.perf_counter() - t0,
         )
 
-    def transcribe(self, wav_path: str, *, word_timestamps: bool) -> ASRResult:
+    def transcribe(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ASRResult:
         duration = probe_duration(wav_path)
         max_seconds = self._settings.MAX_AUDIO_SECONDS
         logger.debug(
@@ -103,13 +111,26 @@ class GigaAMEngine:
                 f"аудио {duration:.1f}с превышает лимит MAX_AUDIO_SECONDS={max_seconds}с"
             )
         if duration <= SHORT_MAX_SECONDS:
-            return self._transcribe_short(wav_path, duration, word_timestamps=word_timestamps)
-        return self._transcribe_longform(wav_path, word_timestamps=word_timestamps)
+            return self._transcribe_short(
+                wav_path, duration, word_timestamps=word_timestamps, cancel_check=cancel_check
+            )
+        return self._transcribe_longform(
+            wav_path, word_timestamps=word_timestamps, cancel_check=cancel_check
+        )
 
     def _transcribe_short(
-        self, wav_path: str, duration: float, *, word_timestamps: bool
+        self,
+        wav_path: str,
+        duration: float,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> ASRResult:
-        """Короткое аудио ≤25с: делегируем декод+инференс самому gigaam."""
+        """Короткое аудио ≤25с: делегируем декод+инференс самому gigaam.
+
+        cancel_check на коротком пути не проверяется (быстрый, неотменяемый); параметр
+        передаётся только при fallback в longform у границы 25с.
+        """
         t0 = time.perf_counter()
         try:
             result = self._model.transcribe(wav_path, word_timestamps=word_timestamps)
@@ -118,7 +139,9 @@ class GigaAMEngine:
             # Если gigaam счёл аудио длинным — это не ошибка, а longform.
             if "too long" in str(exc).lower():
                 logger.debug("gigaam счёл аудио длинным у границы 25с → longform")
-                return self._transcribe_longform(wav_path, word_timestamps=word_timestamps)
+                return self._transcribe_longform(
+                    wav_path, word_timestamps=word_timestamps, cancel_check=cancel_check
+                )
             raise
         except RuntimeError as exc:
             # gigaam/preprocess.load_audio бросает RuntimeError("Failed to load audio").
@@ -144,7 +167,13 @@ class GigaAMEngine:
         segment = SegmentTS(text=text, start=0.0, end=duration, words=words)
         return ASRResult(text=text, duration=duration, segments=[segment])
 
-    def _transcribe_longform(self, wav_path: str, *, word_timestamps: bool) -> ASRResult:
+    def _transcribe_longform(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ASRResult:
         """Длинное аудио >25с: Silero VAD → чанкинг → батчевый инференс → склейка."""
         t0 = time.perf_counter()
         int16 = decode_to_int16_16k_mono(wav_path)
@@ -181,6 +210,13 @@ class GigaAMEngine:
         segments: list[SegmentTS] = []
         chunks_iter = iter(chunks)
         for batch_idx in range(n_batches):
+            if cancel_check is not None and cancel_check():
+                logger.info(
+                    "longform отменён на батче %d/%d (cancel_check вернул True)",
+                    batch_idx + 1,
+                    n_batches,
+                )
+                raise InferenceCancelledError("инференс прерван по запросу отмены")
             batch = list(islice(chunks_iter, batch_size))
             tb = time.perf_counter()
             slices = [

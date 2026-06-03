@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     NUM_THREADS: int = 4
     MAX_UPLOAD_MB: int = 2048
     MAX_AUDIO_SECONDS: int = 36000
+    MAX_QUEUE: int = Field(default=8, ge=1)  # 0 запретил бы все запросы (молчаливый 503)
     VAD_MIN_DURATION: float = 15.0
     VAD_MAX_DURATION: float = 22.0
     VAD_STRICT_LIMIT: float = 30.0
