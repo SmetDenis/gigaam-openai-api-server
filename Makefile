@@ -5,13 +5,19 @@
 HOST ?= 0.0.0.0
 PORT ?= 8000
 
-.PHONY: install run lint format format-check typecheck test test-integration coverage check pre-commit clean
+IMAGE ?= gigaam-api:latest
+
+.PHONY: install run download-weights-local lint format format-check typecheck test test-integration coverage check pre-commit clean \
+        build-docker up down logs download-weights
 
 install:  ## Установить зависимости (uv sync)
 	uv sync
 
 run:  ## Локальный запуск сервиса (uvicorn --reload)
 	uv run uvicorn gigaam_api.main:app --host $(HOST) --port $(PORT) --reload
+
+download-weights-local:  ## Прогрев весов нативно (uv, без Docker) в MODELS_DIR из .env
+	uv run python -m gigaam_api.download_weights
 
 lint:  ## ruff check
 	uv run ruff check .
@@ -42,14 +48,22 @@ clean:  ## Удалить кэши инструментов
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage coverage.xml htmlcov
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
-# --- Этап 06 (Docker/деплой) — заготовка, наполняется позже ---
-# download-weights:  ## Прогрев весов модели в volume
-# 	uv run python -m gigaam_api.download_weights
-# build-docker:  ## Сборка образа (amd64)
-# 	docker build -t gigaam-api .
-# up:  ## docker compose up -d
-# 	docker compose up -d
-# down:  ## docker compose down
-# 	docker compose down
-# logs:  ## docker compose logs -f
-# 	docker compose logs -f
+# --- Docker/деплой (этап 06) ---
+# Удобство для разработки на Mac. На Synology деплой идёт через docker-compose.yml +
+# Container Manager UI (без make). Прод-образ — linux/amd64 (на Mac собирается через
+# эмуляцию; на amd64-хосте Synology — нативно).
+
+build-docker:  ## Сборка прод-образа (linux/amd64)
+	docker build --platform linux/amd64 -t $(IMAGE) .
+
+up:  ## docker compose up -d (поднять сервис)
+	docker compose up -d
+
+down:  ## docker compose down (остановить сервис)
+	docker compose down
+
+logs:  ## docker compose logs -f (логи сервиса)
+	docker compose logs -f
+
+download-weights:  ## Прогрев весов в ./models (разовый контейнер, без подъёма сервиса)
+	docker compose --profile tools run --rm download-weights

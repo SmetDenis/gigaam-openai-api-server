@@ -378,7 +378,7 @@ OpenAI-подобный список: `{"object":"list","data":[{"id":"<MODEL>",
 | 03 | `03-longform-vad.md` | ✅ Готов | 02 | Silero VAD + чанкинг + longform-цикл. |
 | 04 | `04-openai-api.md` | ✅ Готов | 02, 03 | OpenAI-эндпоинты, schemas, formats, auth, runner. |
 | 05 | `05-sse-streaming.md` | ✅ Готов | 04 | SSE-стриминг (`stream=true`); verbose/srt/vtt+stream → синхронный фоллбэк. |
-| 06 | `06-docker-deploy.md` | ⬜ Не начат | 01–05 | Docker (amd64), compose, volume, деплой на Synology. |
+| 06 | `06-docker-deploy.md` | ✅ Готов | 01–05 | Docker (amd64, CPU-torch), compose, volume, деплой на Synology Container Manager. |
 | 07 | `07-cpu-optimization.md` | ⬜ Опционально | 02–06 | int8-флаг, бенчмарки, задел под ONNX. |
 
 > Легенда: ⬜ не начат · 🟡 в работе · ✅ готов. Реализующая сессия обновляет этот трекер.

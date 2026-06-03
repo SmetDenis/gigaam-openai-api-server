@@ -269,8 +269,14 @@ class GigaAMEngine:
             wav_pad, wav_lens = _collate(slices)
             wav_pad = wav_pad.to(self.device).to(self._model._dtype)
             wav_lens = wav_lens.to(self.device)
-            encoded, encoded_len = self._model.forward(wav_pad, wav_lens)
-            decoded = self._model._decode(encoded, encoded_len, wav_lens, word_timestamps)
+            # gigaam.transcribe/transcribe_longform обёрнуты в @torch.inference_mode();
+            # наш longform зовёт forward/_decode напрямую → оборачиваем сами. Без этого
+            # автоград включён, и кэш rotary cos/sin энкодера, созданный коротким путём
+            # (под inference_mode) как inference-тензоры, ломает forward:
+            # "Inference tensors cannot be saved for backward" (короткий→длинный на одном движке).
+            with torch.inference_mode():
+                encoded, encoded_len = self._model.forward(wav_pad, wav_lens)
+                decoded = self._model._decode(encoded, encoded_len, wav_lens, word_timestamps)
             for (text, words), (seg_start, seg_end) in zip(decoded, batch, strict=True):
                 seg_words = None
                 if word_timestamps:

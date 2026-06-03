@@ -3,6 +3,13 @@
 > Этапный спек. Общий контекст — в [`00-master.md`](./00-master.md), особенно §1–2
 > (среды), §9 (зависимости, torch CPU-индекс), §10–11. Самодостаточен.
 
+> **✅ Реализовано (отклонения от исходного текста — см. ADR-лог `CLAUDE.md`, этап 06):**
+> torch CPU — через **`index+marker` в `pyproject.toml`** (единый `uv.lock`), а не «отдельным шагом
+> в Dockerfile»; **Silero бандлится в пакете** → volume/HF-кэш для него не нужен (только `MODELS_DIR`
+> для весов GigaAM); прод-деплой — **`docker-compose.yml` + Synology Container Manager UI, без `make`**
+> (`make`-цели — dev-only); образ самодостаточен (ffmpeg+ffprobe внутри); прогрев весов — опц. compose
+> профиль `tools`. Платформа `linux/amd64` задаётся на build-time, не хардкодом в `FROM`.
+
 ## Цель
 Упаковать сервис в Docker-образ для **Synology (linux/amd64, 4 ядра, 8 ГБ, без GPU)**, без
 весов внутри образа (скачивание при первом старте в смонтированный volume), с

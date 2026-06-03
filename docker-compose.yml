@@ -1,0 +1,58 @@
+# GigaAM ASR — деплой через Docker Compose (основной путь для Synology Container Manager).
+#
+# Synology Container Manager → «Проект» → выбрать этот docker-compose.yml. Перед стартом:
+#   1) Создайте рядом файл `.env` (см. .env.example) и задайте API_KEY.
+#   2) Создайте каталог ./models и сделайте его владельцем UID 1000 (chown 1000:1000 ./models),
+#      иначе non-root в контейнере не запишет туда веса. См. README → «Деплой на Synology».
+# Первый старт скачивает веса GigaAM в ./models (минуты) → затем healthcheck станет healthy.
+
+services:
+  gigaam-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gigaam-api:latest
+    container_name: gigaam-api
+    # required: false → без .env сервис стартует на дефолтах (config.py); на Synology
+    # создайте .env (см. .env.example) и задайте API_KEY — он подхватится автоматически.
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      # Кэш весов переживает пересоздание контейнера; первый старт качает сюда веса.
+      - ./models:/data/models
+    restart: unless-stopped
+    healthcheck:
+      # Без curl (нет в slim) — stdlib urllib, exec-форма CMD. start_period щедрый под
+      # скачивание весов на первом старте: до их загрузки uvicorn ещё не отвечает.
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+
+    # --- Лимиты ресурсов для Synology (NAS: ~4 ядра / 8 ГБ) ---
+    # Подберите под своё железо. На Synology надёжнее работают top-level mem_limit/cpus
+    # (Compose-спецификация v2), чем deploy.resources (Swarm). Раскомментируйте при нужде:
+    # mem_limit: 6g
+    # cpus: 4.0
+    # NUM_THREADS в .env держите ≤ числу выделенных ядер (torch.set_num_threads).
+
+  # --- Опциональный прогрев весов (НЕ стартует с `up`; только по профилю `tools`) ---
+  # Заранее скачать веса в ./models без подъёма HTTP-сервиса (полезно для медленного/офлайн
+  # Synology). Запуск: docker compose --profile tools run --rm download-weights
+  download-weights:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gigaam-api:latest
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./models:/data/models
+    command: ["python", "-m", "gigaam_api.download_weights"]
+    restart: "no"

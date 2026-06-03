@@ -1,0 +1,50 @@
+# Контекст сборки держим минимальным: образ ставит зависимости из pyproject.toml/uv.lock
+# (gigaam тянется из git внутри builder) и копирует только пакет gigaam_api.
+
+# Виртуальные окружения (свежий .venv собирается в образе)
+.venv/
+venv/
+
+# VCS и склонированный для изучения GigaAM (не часть зависимости — она из git)
+.git/
+.gitignore
+tmp/
+
+# Тесты и документация — в рантайм-образ не нужны
+tests/
+docs/
+
+# Веса моделей и аудио-артефакты (качаются/создаются в volume, не в образ)
+models/
+/data/models/
+*.ckpt
+*.onnx
+*.wav
+
+# Секреты и окружение (пробрасываются через env_file/compose, не пекутся в образ)
+.env
+.env.*
+!.env.example
+
+# Кэши инструментов
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# ОС / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Docker-артефакты самого проекта (в контекст не нужны)
+Dockerfile
+.dockerignore
+docker-compose.yml

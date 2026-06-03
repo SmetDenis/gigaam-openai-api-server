@@ -18,6 +18,13 @@
 
 ## Статус
 
+Этап **06 ✅** (Docker/деплой на Synology: multi-stage `python:3.12-slim`, **CPU-torch через
+index+marker** в `pyproject.toml` — единый `uv.lock` Mac(MPS)/Linux(`2.12.0+cpu`), CUDA/nvidia/triton
+больше не тянутся; **самодостаточный образ** — ffmpeg+ffprobe из apt, non-root UID 1000, healthcheck
+через stdlib urllib; `docker-compose.yml` под **Synology Container Manager UI** (`env_file required:false`,
+volume `./models:/data/models`, `start_period 600s` под первый скач весов, опц. профиль `tools` для
+прогрева); `download_weights.py`; финальный README. Деплой = compose + UI, **без make** на проде;
+Silero бандлится в пакете → volume только для весов GigaAM). Следующий — `07` (опц. CPU-оптимизация).
 Этап **05 ✅** (SSE-стриминг `stream=true`: `transcript.text.delta`→`transcript.text.done`→`[DONE]`,
 инвариант `"".join(delta)==done.text==sync` (префикс-пробел), heartbeat-комментарии ~15с против
 idle-таймаутов; `iter_segments` (общий батч-цикл с longform); мост поток→async через `asyncio.Queue`
@@ -31,7 +38,7 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
 `model.forward`/`model._decode`; роутинг по длительности внутри движка; int16-декод для экономии
 памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с,
 загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас,
-тулинг, логирование, FastAPI-скелет). Следующий — `06` (Docker/деплой на Synology).
+тулинг, логирование, FastAPI-скелет).
 Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
@@ -78,6 +85,11 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
 | 2026-06-04 (этап 05) | Отмена стрима — **`cancel_event.set()` в `finally` генератора моста**; Starlette сам отменяет генератор при disconnect (uvicorn HTTP `spec_version=2.3 < 2.4` → ветка task group с `listen_for_disconnect`). НЕ переиспользуем anyio-watcher этапа 04. | `iter_segments` стопает между батчами (та же гранулярность, что sync-путь). `sse_transcription` ловит `Exception` (→ error-событие), но пропускает `CancelledError`/`GeneratorExit` (disconnect → только очистка). |
 | 2026-06-04 (этап 05) | `verbose_json`/`srt`/`vtt` + `stream=true` → **синхронный фоллбэк** (игнор `stream`), НЕ 400 (отклонение от спека §05). Условие стрима: `stream and fmt in {json,text}`. | Большинство OpenAI-клиентов шлют `stream=true` по умолчанию и используют `verbose_json` → 400 ломал бы их. Предсказуемость сохранена: эти форматы всегда дают полный ответ. Спек §05 и master §6.4 обновлены. |
 | 2026-06-04 (этап 05) | `iter_segments` — **общий батч-цикл `_iter_chunks`** (+ `_prepare_longform`), переиспользуемый sync-`_transcribe_longform` (через `list(...)`). Добавлен в `ASREngine` Protocol → фейки-движки в тестах реализуют его (runtime_checkable проверяет наличие метода → иначе `/health` ломается). | Один источник longform-логики (DRY); sync-поведение не изменилось. `iter_segments` для ≤25с делегирует короткому пути и yield'ит его единственный сегмент. |
+| 2026-06-04 (этап 06) | CPU-torch — **`index+marker` в `pyproject.toml`** (НЕ «отдельный шаг в Dockerfile» из спека §06): `[[tool.uv.index]] pytorch-cpu` (`explicit=true`) + `[tool.uv.sources]` torch/torchaudio с маркером `sys_platform=='linux'`. Единый `uv.lock`: Mac → `torch 2.12.0` (PyPI, MPS), Linux → `2.12.0+cpu` (индекс). В Dockerfile просто `uv sync --frozen`. | Идиома uv 2026 (проверено по докам). Побочно `uv lock` **убрал из Linux-резолва весь CUDA-стек** (`nvidia-*`, `triton`, `cuda-*`) — старый lock тянул бы CUDA-torch в образ (гигабайты). Воспроизводимость через единый lock, без хрупкого `--no-install-package` в Dockerfile. |
+| 2026-06-04 (этап 06) | Образ — **multi-stage `python:3.12-slim`**: builder (uv из `ghcr.io/astral-sh/uv` пин + `git` для git-gigaam, `uv sync --no-install-project` слой деп → COPY код → `uv sync`) + тонкий runtime (ffmpeg+ffprobe из apt, non-root **UID/GID 1000**, COPY `.venv`+`gigaam_api`). Платформа — на **build-time** (`docker build --platform linux/amd64`), НЕ хардкод в `FROM`. HEALTHCHECK — `python -c urllib` (в slim нет curl). `XDG_CACHE_HOME=/data/models/.cache`. | **Самодостаточный образ**: ffmpeg внутри (Synology его не имеет — критично). Кэш-слои деп отдельно от кода. `--platform` не в `FROM` → мультиарх-дружественно + быстрая нативная валидация на Mac (arm64, без qemu — проверено, сборка ~90с). UID 1000 + chown volume — права записи весов non-root. |
+| 2026-06-04 (этап 06) | **Silero бандлится в pip-пакете** (`silero_vad/data/*.jit/.onnx` в site-packages) → volume нужен **только** для весов GigaAM (`MODELS_DIR`). Спек §06 «кэшировать Silero/HF в volume» **неактуален**: HF Hub / torch.hub проект не использует; `XDG_CACHE_HOME`→volume оставлен лишь защитной сетью для non-root. | Проверено `find .venv` — модель Silero в пакете, сеть/кэш для VAD не нужны (согласуется с ADR этапа 03). Не плодим лишние volume/ENV. |
+| 2026-06-04 (этап 06, багфикс) | Longform-инференс (`_iter_chunks`: `forward`+`_decode`) обёрнут в **`torch.inference_mode()`** — как `gigaam.transcribe`/`transcribe_longform` (оба `@torch.inference_mode()`). Без обёртки автоград включён, и кэш rotary `cos`/`sin` энкодера, созданный коротким путём (под inference_mode) как inference-тензоры, ронял longform: `RuntimeError: Inference tensors cannot be saved for backward`. Проявлялось **только** в порядке short→long на ОДНОМ инстансе модели (живой сервис); integration-тесты с отдельным инстансом на файл баг не ловили. | Короткий путь делегирует `model.transcribe` (под inference_mode); longform звал `forward`/`_decode` напрямую без контекста → смешение inference-тензоров с автоградом. Регресс-тест `tests/integration/test_short_then_long_real.py` (один движок, short→long) воспроизводит (падал до фикса) и фиксирует. |
+| 2026-06-04 (этап 06) | Деплой — **`docker-compose.yml` + Synology Container Manager UI, без `make` на проде** (требование пользователя). `make`-цели (`build-docker`/`up`/`down`/`logs`/`download-weights`) — только dev-удобство на Mac. `env_file` с `required:false` (стартует на дефолтах без `.env`). Прогрев весов — опц. compose-сервис `download-weights` (`profiles:["tools"]`) + модуль `gigaam_api/download_weights.py`; первый старт сервиса всё равно качает веса (`healthcheck start_period 600s`). | Synology UI не запускает `make`/`compose run` удобно → прод-путь должен «просто работать» из compose: первый `up` сам качает веса, `start_period` покрывает скачивание. Прогрев — для тех, кто хочет пред-скачать; не обязателен. |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 
@@ -88,7 +100,16 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
    доступен лишь при **нативном** запуске (uv), не в Docker. Прод = Synology CPU.
 2. **НЕ вызывать `model.transcribe_longform`** — он тянет pyannote. Longform делаем сами через
    Silero VAD + порт чанкинга GigaAM (master §5.1). Нигде не должно быть `import pyannote`.
-3. **torch в Docker** ставить из CPU-индекса (`download.pytorch.org/whl/cpu`), не тянуть CUDA (master §9, этап 06).
+3. **torch в Docker** — CPU-колёса (`download.pytorch.org/whl/cpu`), без CUDA. Реализовано через
+   `index+marker` в `pyproject.toml` (этап 06): Linux→`2.12.0+cpu`, Mac→`2.12.0`; единый `uv.lock`.
+   **Не возвращать** CUDA в Linux-резолв (раздул бы образ на гигабайты nvidia-пакетов).
+6. **Образ самодостаточен** — ffmpeg+ffprobe встроены (apt). **Synology ffmpeg не имеет** → хостовые
+   бинарники не использовать; всё внутри контейнера (`gigaam_api/audio.py` зовёт их из PATH образа).
+7. **Прямой вызов `model.forward`/`model._decode`** (longform, `_iter_chunks`) **обязательно** в
+   `torch.inference_mode()` — как `gigaam.transcribe`. Иначе автоград + inference-тензорный кэш rotary
+   → `RuntimeError: Inference tensors cannot be saved for backward` (баг ловится только short→long на
+   одном инстансе; тест `tests/integration/test_short_then_long_real.py`). Не убирать обёртку (важно
+   для этапа 07: новые инференс-пути — тоже под `inference_mode`).
 4. **MPS на Mac** может требовать `PYTORCH_ENABLE_MPS_FALLBACK=1` (GigaAM на MPS upstream не тестируют).
 5. **Скорость на 4 ядрах:** 10ч аудио = часы счёта; сервис батчевый, не realtime. Длинные файлы — через `stream=true`.
 
@@ -97,11 +118,13 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
 ```
 make install      # uv sync
 make run          # локальный запуск (uvicorn --reload)
+make download-weights-local  # прогрев весов нативно (uv, без Docker) в MODELS_DIR из .env
 make check        # ruff + ruff format --check + mypy(strict) + pytest(unit) — быстрый цикл
 make pre-commit   # ВСЯ пачка тестов всех типов подряд (check + integration). ← после КАЖДОЙ задачи, обязательно зелёный
 make test         # юнит-тесты (без integration)
 make test-integration  # реальная модель/сеть (маркер integration)
-make build-docker / up / down / logs / download-weights   # этап 06
+make build-docker / up / down / logs   # этап 06 (Docker, dev-удобство)
+make download-weights  # прогрев весов через Docker (профиль tools)
 ```
 > `make pre-commit` — это Makefile-цель, **не инструмент pre-commit**.
 

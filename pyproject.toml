@@ -64,3 +64,15 @@ addopts = "-q --strict-markers"
 
 [tool.uv.sources]
 gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "6e4b027c6fb554e09e8b9059b757a175295ab879" }
+# torch/torchaudio: на Linux (Docker/Synology) — CPU-колёса из индекса PyTorch (без CUDA);
+# на macOS (dev) — дефолтные колёса PyPI (с MPS). Единый uv.lock покрывает обе платформы
+# через маркер платформы. См. docs/specs/06-docker-deploy.md и ADR в CLAUDE.md.
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+# explicit = true → индекс используется ТОЛЬКО для torch/torchaudio (через sources выше);
+# остальные пакеты (onnxruntime и т.п. от gigaam) тянутся с обычного PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
