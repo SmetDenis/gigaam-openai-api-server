@@ -18,8 +18,10 @@
 
 ## Статус
 
-Этап **01 ✅** (каркас, тулинг, логирование, FastAPI-скелет `/health`). Следующий — `02`
-(движок, короткие аудио). Актуальный трекер — в `00-master.md` §13.
+Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с, загрузка модели в
+lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас, тулинг,
+логирование, FastAPI-скелет). Следующий — `03` (Silero VAD + чанкинг + longform-цикл).
+Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
 
@@ -41,6 +43,12 @@
 | 2026-06-03 | `DEVICE=auto` резолвим **сами** (cuda→mps→cpu), в `load_model` передаём явный device (этап 02) | Встроенный auto GigaAM (`device=None`) = cuda→cpu, **без MPS**; MPS нужен на dev-Mac. На этапе 01 `/health.device` = эхо настройки. |
 | 2026-06-03 | CSV-поля Settings (`ALLOWED_MODELS`) — **`Annotated[..., NoDecode]` + `field_validator`** | pydantic-settings по умолчанию парсит `list` как JSON; NoDecode + `split(",")` даёт CSV. |
 | 2026-06-03 | ruff: отключены **RUF001/002/003** (ambiguous-unicode) | Ложные срабатывания на легитимную кириллицу в комментариях/докстрингах (конвенция — русский). |
+| 2026-06-03 | gigaam пин **`6e4b027`** проверен: `torch==2.12.0`/`torchaudio==2.11.0` + `onnxruntime==1.23.2`/`onnx==1.19.1`/`numpy==2.4.6` ставятся на **Python 3.12 macOS arm64** (dev) | Этап 02 — блокер-проверка колёс пройдена; MPS доступен, CUDA нет. |
+| 2026-06-03 | `uv add` хранит git-пин gigaam в **`[tool.uv.sources]`** (`rev=6e4b027`), зависимость объявлена как голое `gigaam` | Идиома uv; пин сохранён (rev + `uv.lock`), форма эквивалентна `gigaam @ git+...@rev`. |
+| 2026-06-03 | Маршрутизация >25с: **pre-check `probe_duration`>25с → `AudioTooLongError`** + защитный перехват сырых исключений gigaam (`ValueError "too long"`→`AudioTooLongError`, `RuntimeError "failed to load audio"`→`AudioDecodeError`); прочие — пробрасываем | gigaam меряет длину по сэмплам, probe — секунды → у границы 25с возможен рассинхрон; не маскируем посторонние ошибки инференса. |
+| 2026-06-03 | `ASREngine` расширен **`info()` + `@runtime_checkable`**; `/health` сужает тип `app.state.engine` через `isinstance`, **не импортируя gigaam/torch** | Принцип master §4.3 «HTTP ⟂ инференс»: HTTP-слой остаётся лёгким, `create_app()` без torch (ленивый импорт движка в lifespan). |
+| 2026-06-03 | mypy: **per-module `ignore_missing_imports`** для `gigaam.*`/`silero_vad.*` | Нет py.typed/стабов; точечный override идиоматичнее широкого `# type: ignore`. |
+| 2026-06-03 | Интеграционный сэмпл — **committed `tests/integration/data/ru_short_sample.wav`** (11.29с, RU; имя ≠ `example.wav`); тест на **cpu**, грейсфул-skip без сети/весов | `.gitignore` глобально игнорирует throwaway `example.wav` (его пишет `gigaam.utils`); отдельное имя сохраняет конвенцию и трекает фикстуру. cpu = детерминизм + прод-Synology. |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 

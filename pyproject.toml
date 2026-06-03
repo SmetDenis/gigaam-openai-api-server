@@ -9,6 +9,10 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
     "python-multipart>=0.0.9",
+    "torch>=2.6",
+    "torchaudio>=2.6",
+    "silero-vad>=6.2.1",
+    "gigaam",
 ]
 
 [dependency-groups]
@@ -47,7 +51,16 @@ warn_unused_ignores = true
 disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
+# gigaam (git-зависимость) и silero-vad не поставляют type-стабов / py.typed.
+# Точечный ignore_missing_imports — идиоматичнее широкого `# type: ignore`.
+[[tool.mypy.overrides]]
+module = ["gigaam.*", "silero_vad.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["integration: требует реальной модели/сети"]
 addopts = "-q --strict-markers"
+
+[tool.uv.sources]
+gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "6e4b027c6fb554e09e8b9059b757a175295ab879" }

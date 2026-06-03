@@ -31,8 +31,22 @@ def create_app() -> FastAPI:
             settings.DEVICE,
             settings.LOG_LEVEL,
         )
-        # TODO(этап 02): загрузка ASR-модели здесь (docs/specs/02-engine-short-audio.md).
-        yield
+        # Ленивый импорт: create_app() остаётся лёгким (без torch), модель грузится
+        # только при реальном старте (первый старт = скачивание весов в MODELS_DIR).
+        from gigaam_api.asr.gigaam_engine import GigaAMEngine
+
+        try:
+            engine = GigaAMEngine(settings)
+        except Exception:
+            logger.exception("ASR-модель не загрузилась — приложение не стартует (fail fast)")
+            raise
+        app.state.engine = engine
+        logger.info("ASR engine ready: model=%s device=%s", engine.model_name, engine.device)
+        try:
+            yield
+        finally:
+            app.state.engine = None
+            logger.info("ASR engine released")
 
     app = FastAPI(title="GigaAM ASR", version=__version__, lifespan=lifespan)
     app.include_router(health_router)

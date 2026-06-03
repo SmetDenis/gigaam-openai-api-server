@@ -363,7 +363,7 @@ OpenAI-подобный список: `{"object":"list","data":[{"id":"<MODEL>",
 |---|---|---|---|---|
 | 00 | `00-master.md` | ✅ Готов | — | Зонтичный спек (этот документ). |
 | 01 | `01-scaffolding.md` | ✅ Готов | — | Каркас, тулинг, логирование, FastAPI-скелет `/health`. |
-| 02 | `02-engine-short-audio.md` | ⬜ Не начат | 01 | Config, ASR-движок (PyTorch), короткие аудио ≤25с, кэш весов. |
+| 02 | `02-engine-short-audio.md` | ✅ Готов | 01 | Config, ASR-движок (PyTorch), короткие аудио ≤25с, кэш весов. |
 | 03 | `03-longform-vad.md` | ⬜ Не начат | 02 | Silero VAD + чанкинг + longform-цикл. |
 | 04 | `04-openai-api.md` | ⬜ Не начат | 02, 03 | OpenAI-эндпоинты, schemas, formats, auth, runner. |
 | 05 | `05-sse-streaming.md` | ⬜ Не начат | 04 | SSE-стриминг (`stream=true`). |

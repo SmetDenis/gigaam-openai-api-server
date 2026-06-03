@@ -4,15 +4,18 @@
 выставляющий **OpenAI-совместимый** API (`POST /v1/audio/transcriptions`). Цель — прод на
 Synology (Docker, CPU); разработка — на macOS (нативно через uv, опционально MPS).
 
-> **Статус:** в разработке. Реализован **этап 01** (каркас, тулинг, `/health`).
-> Полный API, инференс и Docker появятся на следующих этапах. Источник истины — `docs/specs/`
-> (начните с `docs/specs/README.md` и `docs/specs/00-master.md`).
+> **Статус:** в разработке. Реализованы **этапы 01–02**: каркас + ASR-движок (PyTorch/GigaAM),
+> распознавание **коротких аудио ≤25с**, загрузка модели в lifespan, кэш весов в `MODELS_DIR`,
+> `/health` с реальным статусом модели. HTTP-эндпоинт `transcriptions`, longform (VAD) и Docker —
+> на следующих этапах. Источник истины — `docs/specs/` (начните с `docs/specs/README.md`
+> и `docs/specs/00-master.md`).
 
 ## Требования
 
 - **Python 3.12** (см. `.python-version`).
 - **[uv](https://docs.astral.sh/uv/)** — менеджер пакетов и окружений.
-- **ffmpeg** — для декодирования аудио (понадобится на этапе 02+).
+- **ffmpeg** — обязателен: декодирование аудио (GigaAM грузит файлы через ffmpeg) и `ffprobe`
+  для probe длительности.
 
 ## Быстрый старт
 
@@ -26,11 +29,16 @@ make run            # запуск сервиса (uvicorn --reload) на http:/
 
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok","model":"v3_ctc","device":"auto","loaded":false}
+# {"status":"ok","model":"v3_ctc","device":"cpu","loaded":true}
 ```
 
-> На этапе 01 `loaded=false`, а `device` — это эхо настройки `DEVICE`
-> (реальный резолв cuda→mps→cpu появится на этапе 02 при загрузке модели).
+> Модель грузится один раз при старте (lifespan); первый старт скачивает веса в `MODELS_DIR`.
+> После успешной загрузки `loaded=true`, а `device` — это **резолв** `DEVICE` (`auto` → cuda→mps→cpu).
+> На dev-Mac `auto` → `mps`; при ошибках MPS установите `PYTORCH_ENABLE_MPS_FALLBACK=1`. Прод (Synology) — `cpu`.
+
+> **Распознавание:** ядро движка (`GigaAMEngine.transcribe`) работает с **короткими** аудио ≤25с;
+> файл длиннее → `AudioTooLongError` (longform через VAD появится на этапе 03). HTTP-эндпоинт
+> `POST /v1/audio/transcriptions` подключается на этапе 04.
 
 ## Команды (Makefile)
 
