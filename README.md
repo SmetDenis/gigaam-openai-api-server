@@ -4,9 +4,10 @@
 выставляющий **OpenAI-совместимый** API (`POST /v1/audio/transcriptions`). Цель — прод на
 Synology (Docker, CPU); разработка — на macOS (нативно через uv, опционально MPS).
 
-> **Статус:** в разработке. Реализованы **этапы 01–02**: каркас + ASR-движок (PyTorch/GigaAM),
-> распознавание **коротких аудио ≤25с**, загрузка модели в lifespan, кэш весов в `MODELS_DIR`,
-> `/health` с реальным статусом модели. HTTP-эндпоинт `transcriptions`, longform (VAD) и Docker —
+> **Статус:** в разработке. Реализованы **этапы 01–03**: каркас + ASR-движок (PyTorch/GigaAM),
+> распознавание **коротких (≤25с) и длинных (до ~10ч)** аудио — длинные через Silero VAD +
+> чанкинг + батчевый longform-цикл (без pyannote), загрузка модели в lifespan, кэш весов в
+> `MODELS_DIR`, `/health` с реальным статусом модели. HTTP-эндпоинт `transcriptions` и Docker —
 > на следующих этапах. Источник истины — `docs/specs/` (начните с `docs/specs/README.md`
 > и `docs/specs/00-master.md`).
 
@@ -36,9 +37,11 @@ curl http://localhost:8000/health
 > После успешной загрузки `loaded=true`, а `device` — это **резолв** `DEVICE` (`auto` → cuda→mps→cpu).
 > На dev-Mac `auto` → `mps`; при ошибках MPS установите `PYTORCH_ENABLE_MPS_FALLBACK=1`. Прод (Synology) — `cpu`.
 
-> **Распознавание:** ядро движка (`GigaAMEngine.transcribe`) работает с **короткими** аудио ≤25с;
-> файл длиннее → `AudioTooLongError` (longform через VAD появится на этапе 03). HTTP-эндпоинт
-> `POST /v1/audio/transcriptions` подключается на этапе 04.
+> **Распознавание:** ядро движка (`GigaAMEngine.transcribe`) роутит по длительности: ≤25с —
+> короткий путь (делегирует декод gigaam), иначе — longform (Silero VAD → чанкинг → батчи).
+> `AudioTooLongError` теперь только при превышении `MAX_AUDIO_SECONDS` (дефолт 10ч; `0` = без лимита).
+> Пик памяти на longform — на VAD-стадии (весь сигнал во float ≈ 2.3 ГБ/10ч); int16-буфер ~1.15 ГБ/10ч.
+> HTTP-эндпоинт `POST /v1/audio/transcriptions` подключается на этапе 04.
 
 ## Команды (Makefile)
 

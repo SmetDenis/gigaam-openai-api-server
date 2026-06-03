@@ -12,7 +12,7 @@ import gigaam
 import pytest
 
 from gigaam_api.asr import gigaam_engine
-from gigaam_api.asr.engine import ASRResult, AudioTooLongError, SegmentTS, WordTS
+from gigaam_api.asr.engine import ASRResult, SegmentTS, WordTS
 from gigaam_api.audio import AudioDecodeError
 from gigaam_api.config import Settings
 
@@ -83,32 +83,6 @@ def test_transcribe_maps_words_when_requested(
         WordTS(text="мир", start=0.6, end=1.0),
     ]
     assert model.calls == [("/tmp/a.wav", True)]
-
-
-def test_transcribe_raises_audio_too_long_before_calling_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    model = _FakeModel(result=SimpleNamespace(text="x", words=None))
-    _patch_load_model(monkeypatch, model)
-    _patch_probe(monkeypatch, 30.0)
-
-    engine = gigaam_engine.GigaAMEngine(_settings(tmp_path))
-    with pytest.raises(AudioTooLongError):
-        engine.transcribe("/tmp/long.wav", word_timestamps=False)
-    assert model.calls == []  # модель не должна вызываться
-
-
-def test_transcribe_translates_gigaam_too_long_value_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # probe прошёл (≤25с), но gigaam по сэмплам считает иначе → сырой ValueError.
-    model = _FakeModel(raises=ValueError("Too long wav file, use 'transcribe_longform' method."))
-    _patch_load_model(monkeypatch, model)
-    _patch_probe(monkeypatch, 24.9)
-
-    engine = gigaam_engine.GigaAMEngine(_settings(tmp_path))
-    with pytest.raises(AudioTooLongError):
-        engine.transcribe("/tmp/edge.wav", word_timestamps=False)
 
 
 def test_transcribe_translates_gigaam_decode_runtime_error(

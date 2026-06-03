@@ -18,10 +18,12 @@
 
 ## Статус
 
-Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с, загрузка модели в
-lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас, тулинг,
-логирование, FastAPI-скелет). Следующий — `03` (Silero VAD + чанкинг + longform-цикл).
-Актуальный трекер — в `00-master.md` §13.
+Этап **03 ✅** (longform >25с: Silero VAD (JIT) → чистая функция чанкинга `merge_intervals_to_chunks`
+(порт из gigaam) → батчевый `model.forward`/`model._decode`; роутинг по длительности внутри движка;
+int16-декод для экономии памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`,
+короткие аудио ≤25с, загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`).
+Этап **01 ✅** (каркас, тулинг, логирование, FastAPI-скелет). Следующий — `04` (OpenAI-эндпоинты,
+schemas, formats, auth, runner). Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
 
@@ -49,6 +51,11 @@ lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **
 | 2026-06-03 | `ASREngine` расширен **`info()` + `@runtime_checkable`**; `/health` сужает тип `app.state.engine` через `isinstance`, **не импортируя gigaam/torch** | Принцип master §4.3 «HTTP ⟂ инференс»: HTTP-слой остаётся лёгким, `create_app()` без torch (ленивый импорт движка в lifespan). |
 | 2026-06-03 | mypy: **per-module `ignore_missing_imports`** для `gigaam.*`/`silero_vad.*` | Нет py.typed/стабов; точечный override идиоматичнее широкого `# type: ignore`. |
 | 2026-06-03 | Интеграционный сэмпл — **committed `tests/integration/data/ru_short_sample.wav`** (11.29с, RU; имя ≠ `example.wav`); тест на **cpu**, грейсфул-skip без сети/весов | `.gitignore` глобально игнорирует throwaway `example.wav` (его пишет `gigaam.utils`); отдельное имя сохраняет конвенцию и трекает фикстуру. cpu = детерминизм + прод-Synology. |
+| 2026-06-03 (этап 03) | Silero backend — **JIT (`load_silero_vad(onnx=False)`), НЕ ONNX** | Один torch-стек с GigaAM; onnxruntime по умолчанию `intra_op_num_threads=0` (все ядра) → oversubscription с torch-пулом на 4 ядрах Synology. VAD не bottleneck (≈часы инференса vs минуты VAD). Веса бандлятся в пакете (без сети). Переключение в ONNX позже = 1 строка. |
+| 2026-06-03 (этап 03) | **Роутинг внутри движка** (заменяет stage-02 строку выше): `probe_duration` → `>MAX_AUDIO_SECONDS`→`AudioTooLongError`; `≤25с`→short (делегируем `model.transcribe`, не трогаем); иначе→`_transcribe_longform`. `ValueError "too long"` у границы теперь → **fallback в longform** (не ошибка) | `AudioTooLongError` на обычном пути убран (спек 03 задача 6); short-путь не переписываем (минимум риска для hot-path); у границы 25с gigaam меряет по сэмплам → корректнее уйти в longform, чем падать. |
+| 2026-06-03 (этап 03) | Longform — порт `gigaam/vad_utils.py::segment_audio_file`: **чистая функция `merge_intervals_to_chunks` (только границы)** + срез waveform/батчинг в engine; интервалы от Silero; инференс через приватные `model.forward`/`model._decode` (master §5.1); слова `+seg_start`, `round(...,3)` | Чистую логику слияния тестируем синтетикой изолированно (ядро этапа); `transcribe_longform` upstream не зовём (он тянет pyannote). |
+| 2026-06-03 (этап 03) | Память: декод в **int16 `torch.Tensor`** (`torch.frombuffer`, без numpy); весь сигнал во float **только на VAD-стадию** → `del wav_f32` сразу; инференс — float по срезу-батчу | int16 вдвое экономит память (~1.15 ГБ/10ч); пик float — на VAD (≈2.3 ГБ/10ч), не на батчах; numpy не добавляем — остаёмся в torch-стеке. Ленивые импорты torch в `audio.py` (модуль остаётся torch-free для HTTP-слоя). |
+| 2026-06-03 (этап 03) | Longform-фикстура — **committed `ru_long_sample.wav`** (40с, обрезка реального GigaAM `long_example.wav` через ffmpeg, mono 16k) | Реальная RU-речь с паузами → >1 чанк; НЕ `gigaam.utils.download_long_audio()` (wget в CWD). Грейсфул-skip без сети/весов. |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 
