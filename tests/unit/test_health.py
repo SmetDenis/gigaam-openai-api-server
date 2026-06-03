@@ -4,9 +4,11 @@
 загруженный движок имитируем, подставляя фейк в app.state.engine.
 """
 
+from collections.abc import Iterator
+
 from fastapi.testclient import TestClient
 
-from gigaam_api.asr.engine import ASRResult, EngineInfo
+from gigaam_api.asr.engine import ASRResult, EngineInfo, SegmentTS
 from gigaam_api.config import Settings, get_settings
 from gigaam_api.main import create_app
 
@@ -19,6 +21,9 @@ class _FakeEngine:
         self.device = device
 
     def transcribe(self, wav_path: str, *, word_timestamps: bool) -> ASRResult:
+        raise NotImplementedError
+
+    def iter_segments(self, wav_path: str, *, word_timestamps: bool) -> Iterator[SegmentTS]:
         raise NotImplementedError
 
     def info(self) -> EngineInfo:

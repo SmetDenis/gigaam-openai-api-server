@@ -4,11 +4,13 @@ GigaAMEngine подменяется фейком/заглушкой — веса
 контекст-менеджер запускает startup/shutdown (lifespan).
 """
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
 import gigaam_api.asr.gigaam_engine as ge
-from gigaam_api.asr.engine import ASRResult, EngineInfo
+from gigaam_api.asr.engine import ASRResult, EngineInfo, SegmentTS
 from gigaam_api.config import Settings
 from gigaam_api.main import create_app
 from gigaam_api.runner import Runner
@@ -20,6 +22,9 @@ class _FakeEngine:
         self.device = "cpu"
 
     def transcribe(self, wav_path: str, *, word_timestamps: bool) -> ASRResult:
+        raise NotImplementedError
+
+    def iter_segments(self, wav_path: str, *, word_timestamps: bool) -> Iterator[SegmentTS]:
         raise NotImplementedError
 
     def info(self) -> EngineInfo:

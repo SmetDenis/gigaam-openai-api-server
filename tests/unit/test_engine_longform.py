@@ -14,7 +14,13 @@ import pytest
 import torch
 
 import gigaam_api.asr.gigaam_engine as gigaam_engine
-from gigaam_api.asr.engine import ASRResult, AudioTooLongError, InferenceCancelledError, WordTS
+from gigaam_api.asr.engine import (
+    ASRResult,
+    AudioTooLongError,
+    InferenceCancelledError,
+    SegmentTS,
+    WordTS,
+)
 from gigaam_api.asr.gigaam_engine import GigaAMEngine, _collate
 from gigaam_api.config import Settings
 
@@ -255,6 +261,82 @@ def test_longform_cancels_between_batches(monkeypatch: pytest.MonkeyPatch) -> No
         eng._transcribe_longform("x.wav", word_timestamps=False, cancel_check=_CancelAfter(1))
 
     assert model.forward_calls == 1  # успел только первый батч
+
+
+# ---------------------------------------------------- iter_segments (стриминг)
+
+
+class _CancelAfter:
+    """cancel_check, возвращающий True начиная с (after+1)-го вызова."""
+
+    def __init__(self, after: int) -> None:
+        self.calls = 0
+        self.after = after
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return self.calls > self.after
+
+
+def _mock_longform_audio(
+    monkeypatch: pytest.MonkeyPatch, intervals: list[tuple[float, float]]
+) -> None:
+    monkeypatch.setattr(
+        gigaam_engine,
+        "decode_to_int16_16k_mono",
+        lambda path: torch.zeros(60 * 16000, dtype=torch.int16),
+    )
+    monkeypatch.setattr(gigaam_engine, "speech_intervals", lambda wav, vad, *, threshold: intervals)
+
+
+def test_iter_segments_yields_each_longform_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(MODEL="v3_ctc", BATCH_SIZE=4)
+    model = _FakeASRModel([("раз", None), ("два", None), ("три", None)])
+    eng = _bare_engine(settings, model)
+    monkeypatch.setattr(gigaam_engine, "probe_duration", lambda path: 60.0)
+    _mock_longform_audio(monkeypatch, [(0.0, 18.0), (19.0, 37.0), (38.0, 56.0)])
+
+    segs = list(eng.iter_segments("x.wav", word_timestamps=False))
+
+    assert [s.text for s in segs] == ["раз", "два", "три"]
+    assert [(s.start, s.end) for s in segs] == [(0.0, 18.0), (19.0, 37.0), (38.0, 56.0)]
+
+
+def test_iter_segments_short_yields_single_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    eng = _bare_engine(Settings(MODEL="v3_ctc"), _FakeASRModel([]))
+    monkeypatch.setattr(gigaam_engine, "probe_duration", lambda path: 10.0)
+    one = ASRResult("привет", 10.0, [SegmentTS(text="привет", start=0.0, end=10.0)])
+    monkeypatch.setattr(eng, "_transcribe_short", _recorder([], "short", one))
+
+    segs = list(eng.iter_segments("x.wav", word_timestamps=False))
+
+    assert [s.text for s in segs] == ["привет"]
+
+
+def test_iter_segments_cancels_between_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(MODEL="v3_ctc", BATCH_SIZE=1)
+    model = _FakeASRModel([("раз", None)])  # хватит на один обработанный батч
+    eng = _bare_engine(settings, model)
+    monkeypatch.setattr(gigaam_engine, "probe_duration", lambda path: 60.0)
+    _mock_longform_audio(monkeypatch, [(0.0, 18.0), (19.0, 37.0), (38.0, 56.0)])
+
+    got: list[SegmentTS] = []
+    with pytest.raises(InferenceCancelledError):
+        for seg in eng.iter_segments("x.wav", word_timestamps=False, cancel_check=_CancelAfter(1)):
+            got.append(seg)
+
+    assert [s.text for s in got] == ["раз"]  # первый чанк выдан до отмены
+    assert model.forward_calls == 1
+
+
+def test_iter_segments_raises_when_exceeding_max_audio_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eng = _bare_engine(Settings(MODEL="v3_ctc", MAX_AUDIO_SECONDS=20), _FakeASRModel([]))
+    monkeypatch.setattr(gigaam_engine, "probe_duration", lambda path: 30.0)
+
+    with pytest.raises(AudioTooLongError):
+        list(eng.iter_segments("x.wav", word_timestamps=False))
 
 
 def test_transcribe_too_long_valueerror_falls_back_to_longform(

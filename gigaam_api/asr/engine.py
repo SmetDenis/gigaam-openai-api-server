@@ -4,7 +4,7 @@
 про конкретный backend инференса (см. docs/specs/00-master.md §4.3, D3).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, runtime_checkable
 
@@ -75,5 +75,13 @@ class ASREngine(Protocol):
         word_timestamps: bool,
         cancel_check: Callable[[], bool] | None = None,
     ) -> ASRResult: ...
+
+    def iter_segments(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> Iterator[SegmentTS]: ...
 
     def info(self) -> EngineInfo: ...

@@ -10,7 +10,7 @@
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from itertools import islice
 
 import gigaam
@@ -118,6 +118,42 @@ class GigaAMEngine:
             wav_path, word_timestamps=word_timestamps, cancel_check=cancel_check
         )
 
+    def iter_segments(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> Iterator[SegmentTS]:
+        """Сегменты по мере готовности (для SSE-стриминга, спек 05).
+
+        Роутинг как в `transcribe`: ≤25с — один сегмент (делегируем короткому пути);
+        иначе — longform-чанки, каждый yield'ится сразу после декода своего батча.
+        Лимит `MAX_AUDIO_SECONDS` проверяется на первой итерации (безопасная сеть —
+        обработчик валидирует длительность раньше, до начала стрима)."""
+        duration = probe_duration(wav_path)
+        max_seconds = self._settings.MAX_AUDIO_SECONDS
+        logger.debug(
+            "iter_segments wav=%s duration=%.3fs word_timestamps=%s",
+            wav_path,
+            duration,
+            word_timestamps,
+        )
+        if max_seconds > 0 and duration > max_seconds:
+            raise AudioTooLongError(
+                f"аудио {duration:.1f}с превышает лимит MAX_AUDIO_SECONDS={max_seconds}с"
+            )
+        if duration <= SHORT_MAX_SECONDS:
+            result = self._transcribe_short(
+                wav_path, duration, word_timestamps=word_timestamps, cancel_check=cancel_check
+            )
+            yield from result.segments
+            return
+        int16, _duration, chunks = self._prepare_longform(wav_path)
+        yield from self._iter_chunks(
+            int16, chunks, word_timestamps=word_timestamps, cancel_check=cancel_check
+        )
+
     def _transcribe_short(
         self,
         wav_path: str,
@@ -167,19 +203,14 @@ class GigaAMEngine:
         segment = SegmentTS(text=text, start=0.0, end=duration, words=words)
         return ASRResult(text=text, duration=duration, segments=[segment])
 
-    def _transcribe_longform(
-        self,
-        wav_path: str,
-        *,
-        word_timestamps: bool,
-        cancel_check: Callable[[], bool] | None = None,
-    ) -> ASRResult:
-        """Длинное аудио >25с: Silero VAD → чанкинг → батчевый инференс → склейка."""
-        t0 = time.perf_counter()
+    def _prepare_longform(self, wav_path: str) -> tuple[Tensor, float, list[tuple[float, float]]]:
+        """Декод int16 + Silero VAD + чанкинг. Возвращает (int16-сигнал, длительность, границы).
+
+        Пик памяти (master §11) — на VAD-стадии (весь сигнал во float); освобождаем сразу.
+        """
         int16 = decode_to_int16_16k_mono(wav_path)
         duration = int16.numel() / SAMPLE_RATE
 
-        # VAD-стадия: весь сигнал во float (пик памяти, master §11) → освобождаем сразу.
         wav_f32 = int16.float() / 32768.0
         intervals = speech_intervals(wav_f32, self._vad, threshold=self._settings.VAD_THRESHOLD)
         del wav_f32
@@ -201,13 +232,25 @@ class GigaAMEngine:
             len(chunks),
         )
         logger.debug("chunk boundaries: %s", chunks)
+        return int16, duration, chunks
 
+    def _iter_chunks(
+        self,
+        int16: Tensor,
+        chunks: list[tuple[float, float]],
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None,
+    ) -> Iterator[SegmentTS]:
+        """Батчевый инференс по границам чанков; yield сегмента сразу после декода его батча.
+
+        Отмена кооперативная — проверяется в начале каждого батча (между батчами). Общее
+        ядро longform: используется и синхронным `_transcribe_longform`, и стримом `iter_segments`.
+        """
         if not chunks:
-            return ASRResult(text="", duration=duration, segments=[])
-
+            return
         batch_size = self._settings.BATCH_SIZE
         n_batches = (len(chunks) + batch_size - 1) // batch_size
-        segments: list[SegmentTS] = []
         chunks_iter = iter(chunks)
         for batch_idx in range(n_batches):
             if cancel_check is not None and cancel_check():
@@ -239,7 +282,7 @@ class GigaAMEngine:
                         )
                         for w in (words or [])
                     ]
-                segments.append(SegmentTS(text=text, start=seg_start, end=seg_end, words=seg_words))
+                yield SegmentTS(text=text, start=seg_start, end=seg_end, words=seg_words)
             logger.info(
                 "longform batch %d/%d samples=%d in %.2fs",
                 batch_idx + 1,
@@ -248,6 +291,21 @@ class GigaAMEngine:
                 time.perf_counter() - tb,
             )
 
+    def _transcribe_longform(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> ASRResult:
+        """Длинное аудио >25с (sync): VAD → чанкинг → батчевый инференс → склейка в ASRResult."""
+        t0 = time.perf_counter()
+        int16, duration, chunks = self._prepare_longform(wav_path)
+        segments = list(
+            self._iter_chunks(
+                int16, chunks, word_timestamps=word_timestamps, cancel_check=cancel_check
+            )
+        )
         full_text = " ".join(seg.text for seg in segments)
         elapsed = time.perf_counter() - t0
         n_words = sum(len(seg.words) for seg in segments if seg.words is not None)

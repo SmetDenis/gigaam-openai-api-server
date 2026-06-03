@@ -18,6 +18,11 @@
 
 ## Статус
 
+Этап **05 ✅** (SSE-стриминг `stream=true`: `transcript.text.delta`→`transcript.text.done`→`[DONE]`,
+инвариант `"".join(delta)==done.text==sync` (префикс-пробел), heartbeat-комментарии ~15с против
+idle-таймаутов; `iter_segments` (общий батч-цикл с longform); мост поток→async через `asyncio.Queue`
++ `Runner.submit` в тот же воркер; backpressure `try_acquire`→503 ДО заголовков; передача владения
+temp-файлом стриму; verbose/srt/vtt+stream→синхронный фоллбэк; ошибка в потоке→`error`-событие).
 Этап **04 ✅** (OpenAI-совместимый API: `POST /v1/audio/transcriptions` все форматы
 `json`/`text`/`verbose_json`/`srt`/`vtt`, `GET /v1/models`, Bearer-auth, OpenAI-формат ошибок;
 `Runner` (1 воркер + `MAX_QUEUE`→503); кооперативная отмена longform по disconnect через **anyio
@@ -26,7 +31,7 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
 `model.forward`/`model._decode`; роутинг по длительности внутри движка; int16-декод для экономии
 памяти; без pyannote). Этап **02 ✅** (ASR-движок PyTorch за `ASREngine`, короткие аудио ≤25с,
 загрузка модели в lifespan, кэш весов в `MODELS_DIR`, `/health.loaded=true`). Этап **01 ✅** (каркас,
-тулинг, логирование, FastAPI-скелет). Следующий — `05` (SSE-стриминг, `stream=true`).
+тулинг, логирование, FastAPI-скелет). Следующий — `06` (Docker/деплой на Synology).
 Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
@@ -66,6 +71,13 @@ task group**; upload чанками→413; probe-лимит→400). Этап **0
 | 2026-06-03 (этап 04) | OpenAI-уточнения — `timestamp_granularities[]` через `Form(alias="timestamp_granularities[]")`+`list[str]`; verbose `seek=0` + честный per-segment `compression_ratio`; `stream=true`=синхронный ответ до этапа 05; `/v1/models`=весь `ALLOWED_MODELS`. | Канонический OpenAI-клиент шлёт поле с `[]` (проверено). `seek=0` — безопасный совместимый дефолт; `compression_ratio` дёшев и осмысленен. Контракт фиксируется в README. |
 | 2026-06-03 (этап 04) | `compression_ratio` — **байты/байты** `len(b)/len(zlib.compress(b))`, `b=text.encode()` (НЕ `len(text)` в символах). | Реальный Whisper считает байты с обеих сторон; для кириллицы (2 байта/символ) числитель в символах занижал бы ratio вдвое → порог галлюцинаций (>2.4) не сработал бы. Поймано на код-ревью этапа 04. |
 | 2026-06-03 (этап 04) | Watcher disconnect'а — **только через `anyio.create_task_group()` + `cancel_scope.cancel()`**, НЕ через `asyncio.create_task` + `task.cancel()`/`await task`. Исход инференса захватываем внутри группы и диспетчеризуем снаружи (иначе `QueueFullError` обернётся в `ExceptionGroup` → 500 вместо 503). | `Request.is_disconnected()` (Starlette 1.2.x) внутри держит `anyio.CancelScope`; raw-asyncio отмена с ней конфликтует → watcher не завершается, `await watcher` **дедлочит** весь запрос (поймано faulthandler'ом: event loop idle в select, главный поток ждёт portal). Структурная anyio-отмена консистентна. |
+| 2026-06-04 (этап 05) | Семантика delta — **префикс-пробел**: первый delta=`seg0.text`, последующие=`" "+segN.text`; `done.text=" ".join(сегменты)`. Инвариант: `"".join(delta)==done.text==синхронному`. Уточняет master §6.4 («+пробел в конце»). | Универсальный инвариант стриминга OpenAI (chat/responses/transcription, проверено по docs): склейка delta точно воспроизводит финальный текст. Суффикс-пробел дал бы хвостовой пробел → расхождение с `done`/sync (acceptance §05). |
+| 2026-06-04 (этап 05) | Мост «блокирующий `iter_segments` → async» — **`asyncio.Queue` + `loop.call_soon_threadsafe`**, продюсер в **`Runner.submit` (тот же 1 воркер)**, НЕ временный поток. Очередь без `maxsize` (продюсер — bottleneck, никогда не блокируется на put). | Сериализация инференса сохранена (1 за раз), event loop не блокируется. `call_soon_threadsafe` — канонический мост поток→loop. heartbeat реализуем через `wait_for(queue.get(), 15s)` (отмена своей корутины безопасна), НЕ через `wait_for(__anext__())` чужого генератора (его отмена убила бы мост). |
+| 2026-06-04 (этап 05) | Backpressure при стриме — **`runner.try_acquire()` в обработчике ДО `StreamingResponse`** (503 без заголовков); `release()` — в **done-callback future продюсера** (воркер реально свободен), не когда consumer дочитал. `_inflight` под `threading.Lock` (меняют loop и воркер-поток). | Async-генератор откладывает тело до первой итерации (после `200`) → 503 нужно отдать раньше. Release по завершению продюсера = inflight отражает занятость воркера, а не скорость клиента. |
+| 2026-06-04 (этап 05) | **Владение temp-файлом передаётся стриму**: handler ставит флаг `streamed`, `finally` НЕ удаляет файл; удаляет `_cleanup` (done-callback продюсера), когда воркер закончил читать. | Handler возвращает `StreamingResponse` и его `finally` сработал бы СРАЗУ → удалил бы файл до чтения воркером (root-cause). Файл нужен на всё время инференса. |
+| 2026-06-04 (этап 05) | Отмена стрима — **`cancel_event.set()` в `finally` генератора моста**; Starlette сам отменяет генератор при disconnect (uvicorn HTTP `spec_version=2.3 < 2.4` → ветка task group с `listen_for_disconnect`). НЕ переиспользуем anyio-watcher этапа 04. | `iter_segments` стопает между батчами (та же гранулярность, что sync-путь). `sse_transcription` ловит `Exception` (→ error-событие), но пропускает `CancelledError`/`GeneratorExit` (disconnect → только очистка). |
+| 2026-06-04 (этап 05) | `verbose_json`/`srt`/`vtt` + `stream=true` → **синхронный фоллбэк** (игнор `stream`), НЕ 400 (отклонение от спека §05). Условие стрима: `stream and fmt in {json,text}`. | Большинство OpenAI-клиентов шлют `stream=true` по умолчанию и используют `verbose_json` → 400 ломал бы их. Предсказуемость сохранена: эти форматы всегда дают полный ответ. Спек §05 и master §6.4 обновлены. |
+| 2026-06-04 (этап 05) | `iter_segments` — **общий батч-цикл `_iter_chunks`** (+ `_prepare_longform`), переиспользуемый sync-`_transcribe_longform` (через `list(...)`). Добавлен в `ASREngine` Protocol → фейки-движки в тестах реализуют его (runtime_checkable проверяет наличие метода → иначе `/health` ломается). | Один источник longform-логики (DRY); sync-поведение не изменилось. `iter_segments` для ≤25с делегирует короткому пути и yield'ит его единственный сегмент. |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 

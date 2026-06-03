@@ -5,7 +5,8 @@ engine — фейк (через app.state.engine), runner — реальный R
 prompt/temperature, words по granularity, отмена → 499.
 """
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -53,6 +54,19 @@ class _FakeEngine:
             raise self._exc
         assert self._result is not None
         return self._result
+
+    def iter_segments(
+        self,
+        wav_path: str,
+        *,
+        word_timestamps: bool,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> Iterator[SegmentTS]:
+        self.calls.append((wav_path, word_timestamps))
+        if self._exc is not None:
+            raise self._exc
+        assert self._result is not None
+        yield from self._result.segments
 
     def info(self) -> dict[str, Any]:
         return {"model": self.model_name, "device": self.device, "loaded": True}
@@ -183,3 +197,59 @@ def test_queue_full_returns_503() -> None:
     app.state.runner = _FullRunner()
     resp = _post(TestClient(app))
     assert resp.status_code == 503
+
+
+# ----------------------------------------------------------------- стриминг (SSE)
+
+_MULTI = ASRResult(
+    text="раз два",
+    duration=2.0,
+    segments=[SegmentTS("раз", 0.0, 1.0), SegmentTS("два", 1.0, 2.0)],
+)
+
+
+def _parse_sse(body: str) -> list[Any]:
+    """Распарсить SSE-тело в список полезных нагрузок (`dict` или строка `[DONE]`)."""
+    out: list[Any] = []
+    for frame in body.split("\n\n"):
+        line = frame.strip()
+        if not line.startswith("data: "):
+            continue  # пропускаем heartbeat-комментарии и пустые
+        payload = line[len("data: ") :]
+        out.append(payload if payload == "[DONE]" else json.loads(payload))
+    return out
+
+
+def test_stream_json_emits_sse_and_done_matches_sync() -> None:
+    client = TestClient(_build(_FakeEngine(result=_MULTI)))
+    resp = _post(client, data={"response_format": "json", "stream": "true"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    payloads = _parse_sse(resp.text)
+    deltas = [p["delta"] for p in payloads if isinstance(p, dict) and p["type"].endswith(".delta")]
+    done = next(p for p in payloads if isinstance(p, dict) and p["type"].endswith(".done"))
+    assert deltas == ["раз", " два"]  # префикс-пробел: ''.join == done.text
+    assert "".join(deltas) == done["text"] == _MULTI.text  # done идентичен синхронному тексту
+    assert payloads[-1] == "[DONE]"
+
+
+def test_stream_text_format_emits_sse() -> None:
+    client = TestClient(_build(_FakeEngine(result=_MULTI)))
+    resp = _post(client, data={"response_format": "text", "stream": "true"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert _parse_sse(resp.text)[-1] == "[DONE]"
+
+
+def test_stream_verbose_json_falls_back_to_sync() -> None:
+    client = TestClient(_build(_FakeEngine(result=_MULTI)))
+    resp = _post(client, data={"response_format": "verbose_json", "stream": "true"})
+
+    # Синхронный фоллбэк: обычный JSON, не SSE (verbose требует полного результата).
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    body = resp.json()
+    assert body["text"] == "раз два"
+    assert "segments" in body
