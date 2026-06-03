@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
-# GigaAM ASR — образ для Synology (linux/amd64, CPU-only torch, БЕЗ весов в образе).
+# GigaAM ASR — self-hosted образ (linux/amd64, CPU-only torch, БЕЗ весов в образе).
 #
 # Платформа задаётся на сборке (`docker build --platform linux/amd64 ...`, см. Makefile),
 # а НЕ хардкодом в FROM — так образ остаётся мультиарх-дружественным, а на amd64-хосте
-# (Synology) собирается нативно. torch/torchaudio ставятся CPU-колёсами из индекса
+# собирается нативно. torch/torchaudio ставятся CPU-колёсами из индекса
 # download.pytorch.org/whl/cpu (через [tool.uv.sources] + маркер sys_platform=='linux'
 # в pyproject.toml) — без CUDA/nvidia-пакетов. Веса GigaAM качаются при первом старте
 # в смонтированный volume (MODELS_DIR=/data/models).
@@ -49,7 +49,7 @@ RUN apt-get update \
 
 # Непривилегированный пользователь с фиксированным UID/GID 1000. ВАЖНО: хостовый каталог
 # ./models, монтируемый в /data/models, должен принадлежать UID 1000 (chown 1000:1000),
-# иначе non-root не сможет записать веса в volume. См. README → «Деплой на Synology».
+# иначе non-root не сможет записать веса в volume. См. README → «Деплой (Docker Compose)».
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin app
 
@@ -73,7 +73,7 @@ EXPOSE 8000
 
 # Healthcheck без curl (его нет в slim) — тонкий запрос к /health через stdlib urllib.
 # start-period щедрый: первый старт может качать веса (на медленном канале — минуты),
-# до их загрузки uvicorn ещё не отвечает. На Synology start_period задаётся в compose.
+# до их загрузки uvicorn ещё не отвечает. В compose start_period задаётся отдельно.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=5 \
     CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
 

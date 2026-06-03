@@ -49,9 +49,9 @@ clean:  ## Удалить кэши инструментов
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
 # --- Docker/деплой (этап 06) ---
-# Удобство для разработки на Mac. На Synology деплой идёт через docker-compose.yml +
-# Container Manager UI (без make). Прод-образ — linux/amd64 (на Mac собирается через
-# эмуляцию; на amd64-хосте Synology — нативно).
+# Удобство для разработки на Mac. В проде деплой идёт через docker-compose.yml +
+# `docker compose` (без make). Прод-образ — linux/amd64 (на Mac собирается через
+# эмуляцию; на amd64-хосте — нативно).
 
 build-docker:  ## Сборка прод-образа (linux/amd64)
 	docker build --platform linux/amd64 -t $(IMAGE) .

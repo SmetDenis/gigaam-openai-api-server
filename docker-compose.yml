@@ -1,9 +1,9 @@
-# GigaAM ASR — деплой через Docker Compose (основной путь для Synology Container Manager).
+# GigaAM ASR — деплой через Docker Compose (self-hosted: Linux-сервер / NAS / мини-ПК).
 #
-# Synology Container Manager → «Проект» → выбрать этот docker-compose.yml. Перед стартом:
+# Запуск: `docker compose up -d --build` (UI управления контейнерами тоже подойдёт). Перед стартом:
 #   1) Создайте рядом файл `.env` (см. .env.example) и задайте API_KEY.
 #   2) Создайте каталог ./models и сделайте его владельцем UID 1000 (chown 1000:1000 ./models),
-#      иначе non-root в контейнере не запишет туда веса. См. README → «Деплой на Synology».
+#      иначе non-root в контейнере не запишет туда веса. См. README → «Деплой (Docker Compose)».
 # Первый старт скачивает веса GigaAM в ./models (минуты) → затем healthcheck станет healthy.
 
 services:
@@ -13,7 +13,7 @@ services:
       dockerfile: Dockerfile
     image: gigaam-api:latest
     container_name: gigaam-api
-    # required: false → без .env сервис стартует на дефолтах (config.py); на Synology
+    # required: false → без .env сервис стартует на дефолтах (config.py); для прода
     # создайте .env (см. .env.example) и задайте API_KEY — он подхватится автоматически.
     env_file:
       - path: .env
@@ -33,8 +33,8 @@ services:
       retries: 5
       start_period: 600s
 
-    # --- Лимиты ресурсов для Synology (NAS: ~4 ядра / 8 ГБ) ---
-    # Подберите под своё железо. На Synology надёжнее работают top-level mem_limit/cpus
+    # --- Лимиты ресурсов (типичный self-hosted хост: ~4 ядра / 8 ГБ) ---
+    # Подберите под своё железо. Надёжнее работают top-level mem_limit/cpus
     # (Compose-спецификация v2), чем deploy.resources (Swarm). Раскомментируйте при нужде:
     # mem_limit: 6g
     # cpus: 4.0
@@ -42,7 +42,7 @@ services:
 
   # --- Опциональный прогрев весов (НЕ стартует с `up`; только по профилю `tools`) ---
   # Заранее скачать веса в ./models без подъёма HTTP-сервиса (полезно для медленного/офлайн
-  # Synology). Запуск: docker compose --profile tools run --rm download-weights
+  # хоста). Запуск: docker compose --profile tools run --rm download-weights
   download-weights:
     build:
       context: .
