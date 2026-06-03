@@ -18,7 +18,8 @@
 
 ## Статус
 
-Спеки написаны (этап 00 ✅). Код ещё не начат — следующий этап `01`. Смотри трекер в master.
+Этап **01 ✅** (каркас, тулинг, логирование, FastAPI-скелет `/health`). Следующий — `02`
+(движок, короткие аудио). Актуальный трекер — в `00-master.md` §13.
 
 ## Архитектурные решения (ADR-лог)
 
@@ -35,6 +36,11 @@
 | 2026-06-03 | Auth — Bearer-ключ из `.env` (`API_KEY`) | Совместимо с OpenAI-клиентами. |
 | 2026-06-03 | Веса — скачиваются при первом старте в volume (`MODELS_DIR`), НЕ в образе | Лёгкий образ. |
 | 2026-06-03 | API — синхронный `transcriptions` + опц. `stream=true` (SSE); эндпоинты `transcriptions`, `/v1/models`, `/health` | Стандарт OpenAI; SSE против таймаутов. translations/WebSocket — вне scope. |
+| 2026-06-03 | Сборка пакета — **hatchling** (editable install через `uv sync`) | `gigaam_api` импортируется в pytest/mypy/uvicorn; `uvicorn gigaam_api.main:app` работает надёжно. |
+| 2026-06-03 | Пиннинг — **нижние границы (`>=`) в `pyproject.toml` + точные пины в `uv.lock`** | Идиома uv: воспроизводимость через lock, апгрейд осознанно через `uv lock --upgrade`. |
+| 2026-06-03 | `DEVICE=auto` резолвим **сами** (cuda→mps→cpu), в `load_model` передаём явный device (этап 02) | Встроенный auto GigaAM (`device=None`) = cuda→cpu, **без MPS**; MPS нужен на dev-Mac. На этапе 01 `/health.device` = эхо настройки. |
+| 2026-06-03 | CSV-поля Settings (`ALLOWED_MODELS`) — **`Annotated[..., NoDecode]` + `field_validator`** | pydantic-settings по умолчанию парсит `list` как JSON; NoDecode + `split(",")` даёт CSV. |
+| 2026-06-03 | ruff: отключены **RUF001/002/003** (ambiguous-unicode) | Ложные срабатывания на легитимную кириллицу в комментариях/докстрингах (конвенция — русский). |
 
 <!-- Новые решения добавляй новой строкой выше этой подсказки. -->
 

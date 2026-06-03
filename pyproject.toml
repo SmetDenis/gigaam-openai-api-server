@@ -1,0 +1,53 @@
+[project]
+name = "gigaam-api"
+version = "0.1.0"
+description = "OpenAI-совместимый сервис распознавания русской речи на базе GigaAM"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    "python-multipart>=0.0.9",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.13",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gigaam_api"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Комментарии/докстринги/строки в проекте — на русском (конвенция).
+# RUF001/002/003 (ambiguous-unicode) дают ложные срабатывания на кириллицу — отключаем.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.format]
+# Дефолтные настройки форматтера ruff.
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: требует реальной модели/сети"]
+addopts = "-q --strict-markers"
