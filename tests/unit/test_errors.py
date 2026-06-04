@@ -1,4 +1,4 @@
-"""Тесты OpenAI-формата ошибок: каждое исключение → правильный код и тело."""
+"""Tests of the OpenAI error format: each exception → the right code and body."""
 
 import pytest
 from fastapi import FastAPI
@@ -24,12 +24,12 @@ def _app_raising(exc: Exception) -> FastAPI:
 @pytest.mark.parametrize(
     "exc, status_code, type_",
     [
-        (AudioDecodeError("битый файл"), 400, "invalid_request_error"),
-        (AudioTooLongError("слишком длинное"), 400, "invalid_request_error"),
-        (PayloadTooLargeError("слишком большой"), 413, "invalid_request_error"),
-        (AudioToolNotFoundError("нет ffmpeg"), 500, "api_error"),
-        (QueueFullError("очередь полна"), 503, "server_error"),
-        (AuthError("неверный ключ"), 401, "invalid_request_error"),
+        (AudioDecodeError("corrupt audio file"), 400, "invalid_request_error"),
+        (AudioTooLongError("audio is too long"), 400, "invalid_request_error"),
+        (PayloadTooLargeError("upload exceeds size limit"), 413, "invalid_request_error"),
+        (AudioToolNotFoundError("ffmpeg not found"), 500, "api_error"),
+        (QueueFullError("inference queue is full"), 503, "server_error"),
+        (AuthError("invalid API key"), 401, "invalid_request_error"),
     ],
 )
 def test_custom_exception_maps_to_openai_error(
@@ -45,12 +45,12 @@ def test_custom_exception_maps_to_openai_error(
 
 
 def test_auth_error_sets_invalid_api_key_code() -> None:
-    client = TestClient(_app_raising(AuthError("неверный ключ")))
+    client = TestClient(_app_raising(AuthError("invalid API key")))
     assert client.get("/boom").json()["error"]["code"] == "invalid_api_key"
 
 
 def test_unexpected_exception_maps_to_500_api_error() -> None:
-    # Catch-all для непредусмотренных ошибок (ffmpeg-краш и т.п.) — нужен флаг ниже.
+    # Catch-all for unexpected errors (ffmpeg crash, etc.) — the flag below is needed.
     client = TestClient(_app_raising(RuntimeError("kaboom")), raise_server_exceptions=False)
     resp = client.get("/boom")
     assert resp.status_code == 500
@@ -69,7 +69,7 @@ def test_request_validation_maps_to_400() -> None:
     def need(n: Annotated[int, Query()]) -> dict[str, int]:
         return {"n": n}
 
-    resp = TestClient(app).get("/need")  # обязательный query отсутствует
+    resp = TestClient(app).get("/need")  # the required query param is missing
     assert resp.status_code == 400
     assert resp.json()["error"]["type"] == "invalid_request_error"
     assert resp.json()["error"]["param"] == "n"

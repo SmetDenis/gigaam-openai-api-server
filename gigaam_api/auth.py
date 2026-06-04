@@ -1,7 +1,7 @@
-"""Bearer-аутентификация: один общий ключ из настроек.
+"""Bearer authentication: a single shared key from the settings.
 
-Пустой API_KEY → auth выключен (LAN-dev). Иначе сравнение постоянным временем
-(`secrets.compare_digest`). Несовпадение/отсутствие → AuthError (→ 401).
+Empty API_KEY → auth disabled (LAN-dev). Otherwise a constant-time comparison
+(`secrets.compare_digest`). Mismatch/absence → AuthError (→ 401).
 """
 
 import logging
@@ -23,12 +23,12 @@ def require_auth(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
     if not settings.API_KEY:
-        logger.debug("auth выключен (пустой API_KEY)")
+        logger.debug("auth disabled (empty API_KEY)")
         return
     provided = ""
     if authorization and authorization.startswith(_BEARER_PREFIX):
         provided = authorization[len(_BEARER_PREFIX) :]
     if not provided or not secrets.compare_digest(provided, settings.API_KEY):
-        logger.debug("auth не пройден")
+        logger.debug("auth failed")
         raise AuthError("Incorrect API key provided.")
-    logger.debug("auth пройден")
+    logger.debug("auth passed")

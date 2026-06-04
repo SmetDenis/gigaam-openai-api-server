@@ -1,4 +1,4 @@
-"""Тесты setup_logging: идемпотентность, уровень, выбор форматтера."""
+"""setup_logging tests: idempotency, level, formatter selection."""
 
 import logging
 

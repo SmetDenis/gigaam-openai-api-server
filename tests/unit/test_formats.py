@@ -1,4 +1,7 @@
-"""Тесты чистых рендер-функций formats (json/text/verbose_json/srt/vtt) + форматтер времени."""
+"""Tests for the pure render functions in formats (json/text/verbose_json/srt/vtt).
+
+Also covers the time formatter.
+"""
 
 import pytest
 
@@ -36,12 +39,12 @@ def test_verbose_json_default_segment_only() -> None:
     assert out["language"] == "russian"
     assert out["duration"] == 5.0
     assert "segments" in out
-    assert "words" not in out  # без word-granularity слов нет
+    assert "words" not in out  # without word granularity there are no words
     seg0 = out["segments"][0]
     assert seg0["id"] == 0 and seg0["seek"] == 0
     assert seg0["tokens"] == [] and seg0["temperature"] == 0.0
     assert seg0["avg_logprob"] == 0.0 and seg0["no_speech_prob"] == 0.0
-    assert seg0["compression_ratio"] > 0.5  # байт/байт как у Whisper (кириллица не должна занижать)
+    assert seg0["compression_ratio"] > 0.5  # bytes/bytes like Whisper (Cyrillic must not lower it)
 
 
 def test_verbose_json_word_granularity_adds_words() -> None:
@@ -65,7 +68,7 @@ def test_compression_ratio_empty_text_is_zero() -> None:
 def test_to_srt() -> None:
     srt = formats.to_srt(_result())
     assert srt == (
-        "1\n00:00:00,000 --> 00:00:02,000\nпривет мир\n\n2\n00:00:03,000 --> 00:00:05,000\nпока\n\n"
+        "1\n00:00:00,000 --> 00:00:02,000\nпривет мир\n\n2\n00:00:03,000 --> 00:00:05,000\nпока\n\n"  # noqa: RUF001
     )
 
 
@@ -73,8 +76,8 @@ def test_to_vtt() -> None:
     vtt = formats.to_vtt(_result())
     assert vtt == (
         "WEBVTT\n\n"
-        "00:00:00.000 --> 00:00:02.000\nпривет мир\n\n"
-        "00:00:03.000 --> 00:00:05.000\nпока\n\n"
+        "00:00:00.000 --> 00:00:02.000\nпривет мир\n\n"  # noqa: RUF001
+        "00:00:03.000 --> 00:00:05.000\nпока\n\n"  # noqa: RUF001
     )
 
 
@@ -92,10 +95,10 @@ def test_vtt_empty_segments_is_header_only() -> None:
     "seconds, sep, expected",
     [
         (0.0, ",", "00:00:00,000"),
-        (3661.5, ",", "01:01:01,500"),  # 1ч 1м 1.5с
+        (3661.5, ",", "01:01:01,500"),  # 1h 1m 1.5s
         (3661.5, ".", "01:01:01.500"),
         (59.999, ",", "00:00:59,999"),
-        (-1.0, ",", "00:00:00,000"),  # отрицательное клампится в 0
+        (-1.0, ",", "00:00:00,000"),  # negative values are clamped to 0
     ],
 )
 def test_format_ts(seconds: float, sep: str, expected: str) -> None:

@@ -1,8 +1,8 @@
-"""Точка входа FastAPI-приложения.
+"""FastAPI application entry point.
 
-create_app() остаётся лёгким (без torch): модель и Runner создаются в lifespan.
-Роутеры (/health, /v1/audio/transcriptions, /v1/models) и OpenAI-обработчики ошибок
-подключаются при создании приложения.
+create_app() stays lightweight (no torch): the model and Runner are created in the lifespan.
+Routers (/health, /v1/audio/transcriptions, /v1/models) and OpenAI error handlers
+are wired up when the application is created.
 """
 
 import logging
@@ -36,13 +36,15 @@ def create_app() -> FastAPI:
             settings.DEVICE,
             settings.LOG_LEVEL,
         )
-        # Ленивый импорт: create_app() остаётся без torch; модель грузится при старте.
+        # Lazy import: create_app() stays torch-free; the model is loaded at startup.
         from gigaam_api.asr.gigaam_engine import GigaAMEngine
 
         try:
             engine = GigaAMEngine(settings)
         except Exception:
-            logger.exception("ASR-модель не загрузилась — приложение не стартует (fail fast)")
+            logger.exception(
+                "ASR model failed to load — the application will not start (fail fast)"
+            )
             raise
         app.state.engine = engine
         app.state.runner = Runner(max_queue=settings.MAX_QUEUE)

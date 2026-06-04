@@ -1,4 +1,4 @@
-"""Тесты конфигурации Settings."""
+"""Settings configuration tests."""
 
 import pytest
 from pydantic import ValidationError
@@ -22,7 +22,7 @@ def test_defaults() -> None:
 
 
 def test_allowed_models_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Пробелы вокруг элементов и пустые значения отбрасываются.
+    # Whitespace around items and empty values are dropped.
     monkeypatch.setenv("ALLOWED_MODELS", "v3_ctc, v3_rnnt , v3_e2e_ctc,")
     s = Settings()
     assert s.ALLOWED_MODELS == ["v3_ctc", "v3_rnnt", "v3_e2e_ctc"]
@@ -50,7 +50,7 @@ def test_max_queue_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_max_queue_zero_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    # MAX_QUEUE=0 запретил бы все запросы (503 на всё) — должен отклоняться валидацией.
+    # MAX_QUEUE=0 would reject all requests (503 for everything) — must be rejected by validation.
     monkeypatch.setenv("MAX_QUEUE", "0")
     with pytest.raises(ValidationError):
         Settings()

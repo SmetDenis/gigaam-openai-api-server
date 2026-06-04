@@ -1,16 +1,16 @@
-"""Pydantic-модели ответа OpenAI-совместимого API (единый источник формы)."""
+"""Pydantic response models for the OpenAI-compatible API (single source of shape)."""
 
 from pydantic import BaseModel
 
 
 class TranscriptionJSON(BaseModel):
-    """Ответ `response_format=json`."""
+    """Response for `response_format=json`."""
 
     text: str
 
 
 class VerboseWord(BaseModel):
-    """Слово в `verbose_json` (ключ `word`, не `text`)."""
+    """Word in `verbose_json` (key `word`, not `text`)."""
 
     word: str
     start: float
@@ -18,7 +18,7 @@ class VerboseWord(BaseModel):
 
 
 class VerboseSegment(BaseModel):
-    """Сегмент в `verbose_json`. Недоступные у GigaAM поля — best-effort."""
+    """Segment in `verbose_json`. Fields unavailable from GigaAM are best-effort."""
 
     id: int
     seek: int
@@ -33,7 +33,10 @@ class VerboseSegment(BaseModel):
 
 
 class VerboseTranscription(BaseModel):
-    """Ответ `response_format=verbose_json`. `segments`/`words` включаются по granularity."""
+    """Response for `response_format=verbose_json`.
+
+    `segments`/`words` are included per granularity.
+    """
 
     task: str
     language: str
@@ -44,7 +47,7 @@ class VerboseTranscription(BaseModel):
 
 
 class ModelObject(BaseModel):
-    """Элемент `GET /v1/models`."""
+    """Item of `GET /v1/models`."""
 
     id: str
     object: str = "model"
@@ -53,7 +56,7 @@ class ModelObject(BaseModel):
 
 
 class ModelsList(BaseModel):
-    """Ответ `GET /v1/models`."""
+    """Response for `GET /v1/models`."""
 
     object: str = "list"
     data: list[ModelObject]

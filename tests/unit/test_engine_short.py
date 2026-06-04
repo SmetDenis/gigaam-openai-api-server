@@ -1,7 +1,7 @@
-"""Юнит-тесты GigaAMEngine (короткое аудио) на моках.
+"""Unit tests for GigaAMEngine (short audio) using mocks.
 
-gigaam.load_model подменяется фейком — ни весов, ни сети. probe_duration
-подменяется, чтобы управлять маршрутизацией по длительности без реальных файлов.
+gigaam.load_model is replaced with a fake — no weights, no network. probe_duration
+is patched to control duration-based routing without real files.
 """
 
 from pathlib import Path
@@ -18,7 +18,7 @@ from gigaam_api.config import Settings
 
 
 class _FakeModel:
-    """Минимальный двойник GigaAMASR: фиксирует вызовы и возвращает заданный результат."""
+    """Minimal GigaAMASR double: records calls and returns the given result."""
 
     def __init__(self, result: Any = None, raises: Exception | None = None) -> None:
         self._result = result
@@ -100,7 +100,7 @@ def test_transcribe_translates_gigaam_decode_runtime_error(
 def test_transcribe_propagates_unrelated_runtime_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Не маскируем посторонние RuntimeError (например, ошибки инференса).
+    # Do not mask unrelated RuntimeError (e.g. inference errors).
     model = _FakeModel(raises=RuntimeError("CUDA kaboom"))
     _patch_load_model(monkeypatch, model)
     _patch_probe(monkeypatch, 5.0)

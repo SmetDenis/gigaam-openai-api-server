@@ -1,4 +1,4 @@
-"""ASR-слой: контракт движка (`engine`), PyTorch-реализация (`gigaam_engine`).
+"""ASR layer: the engine contract (`engine`), the PyTorch implementation (`gigaam_engine`).
 
-VAD/чанкинг (`vad`) и форматтеры (`formats`) добавятся на следующих этапах.
+VAD/chunking (`vad`) and the formatters (`formats`) will be added in later stages.
 """

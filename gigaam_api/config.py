@@ -1,6 +1,6 @@
-"""Конфигурация сервиса (pydantic-settings). Единственный источник настроек — `.env`.
+"""Service configuration (pydantic-settings). The single source of settings is `.env`.
 
-Полный справочник переменных — в README (раздел «Конфигурация»).
+A full reference of the variables is in the README (the "Configuration" section).
 """
 
 from functools import lru_cache
@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Настройки приложения. Имена полей совпадают с переменными окружения."""
+    """Application settings. Field names match the environment variables."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     NUM_THREADS: int = 4
     MAX_UPLOAD_MB: int = 2048
     MAX_AUDIO_SECONDS: int = 36000
-    MAX_QUEUE: int = Field(default=8, ge=1)  # 0 запретил бы все запросы (молчаливый 503)
+    MAX_QUEUE: int = Field(default=8, ge=1)  # 0 would reject all requests (a silent 503)
     VAD_MIN_DURATION: float = 15.0
     VAD_MAX_DURATION: float = 22.0
     VAD_STRICT_LIMIT: float = 30.0
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     LOG_JSON: bool = False
     DEFAULT_RESPONSE_FORMAT: Literal["json", "text", "verbose_json", "srt", "vtt"] = "json"
-    # NoDecode отключает JSON-парсинг complex-типа: значение приходит как CSV-строка.
+    # NoDecode disables JSON parsing of the complex type: the value arrives as a CSV string.
     ALLOWED_MODELS: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["v3_ctc", "v3_e2e_ctc", "v3_rnnt", "v3_e2e_rnnt"]
     )
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     @field_validator("ALLOWED_MODELS", mode="before")
     @classmethod
     def _split_allowed_models(cls, v: str | list[str]) -> list[str]:
-        """Распарсить CSV-строку из env в список (пробелы и пустые элементы отбрасываются)."""
+        """Parse the CSV string from env into a list (whitespace and empty items are dropped)."""
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
@@ -52,5 +52,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Синглтон настроек (читается из окружения один раз)."""
+    """Settings singleton (read from the environment once)."""
     return Settings()

@@ -1,4 +1,4 @@
-"""Тесты Pydantic-схем ответа (форма OpenAI)."""
+"""Tests for the Pydantic response schemas (OpenAI shape)."""
 
 from gigaam_api.schemas import (
     ModelObject,
@@ -40,5 +40,5 @@ def test_verbose_transcription_omits_none_when_dumped() -> None:
     )
     dumped = model.model_dump(exclude_none=True)
     assert "segments" in dumped
-    assert "words" not in dumped  # words=None → пропущено (granularity без word)
-    _ = VerboseWord(word="x", start=0.0, end=1.0)  # модель словарного элемента существует
+    assert "words" not in dumped  # words=None → omitted (granularity without word)
+    _ = VerboseWord(word="x", start=0.0, end=1.0)  # the word-element model exists

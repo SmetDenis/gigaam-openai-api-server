@@ -1,7 +1,7 @@
-"""Тесты lifespan: загрузка движка в app.state и fail-fast при ошибке.
+"""Lifespan tests: loading the engine into app.state and fail-fast on error.
 
-GigaAMEngine подменяется фейком/заглушкой — веса не качаются. TestClient как
-контекст-менеджер запускает startup/shutdown (lifespan).
+GigaAMEngine is replaced by a fake/stub — weights are not downloaded. TestClient as a
+context manager runs startup/shutdown (lifespan).
 """
 
 from collections.abc import Iterator
@@ -40,7 +40,7 @@ def test_lifespan_loads_engine_and_releases(monkeypatch: pytest.MonkeyPatch) -> 
         assert isinstance(app.state.runner, Runner)
         assert client.get("/health").json()["loaded"] is True
 
-    # shutdown освободил движок и runner
+    # shutdown released the engine and runner
     assert app.state.engine is None
     assert app.state.runner is None
 

@@ -1,7 +1,7 @@
-"""Тест эндпоинта GET /health.
+"""Test of the GET /health endpoint.
 
-Юнит-тесты не запускают lifespan (plain TestClient), поэтому модель не грузится:
-загруженный движок имитируем, подставляя фейк в app.state.engine.
+Unit tests do not run the lifespan (plain TestClient), so the model is not loaded:
+we simulate a loaded engine by injecting a fake into app.state.engine.
 """
 
 from collections.abc import Iterator
@@ -14,7 +14,7 @@ from gigaam_api.main import create_app
 
 
 class _FakeEngine:
-    """Двойник движка, удовлетворяющий ASREngine (runtime_checkable)."""
+    """Engine double that satisfies ASREngine (runtime_checkable)."""
 
     def __init__(self, model_name: str, device: str) -> None:
         self.model_name = model_name
@@ -48,7 +48,7 @@ def test_health_reports_loaded_engine() -> None:
 
 def test_health_without_engine_reports_not_loaded() -> None:
     app = create_app()
-    # Движок не загружен (lifespan не запускался) — эхо настроек, loaded=false.
+    # Engine not loaded (lifespan did not run) — echo the settings, loaded=false.
     app.dependency_overrides[get_settings] = lambda: Settings()
     client = TestClient(app)
 

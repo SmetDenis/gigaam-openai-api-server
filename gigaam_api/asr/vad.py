@@ -1,11 +1,12 @@
-"""Silero VAD + алгоритм чанкинга для longform-распознавания.
+"""Silero VAD + chunking algorithm for longform recognition.
 
-`merge_intervals_to_chunks` — чистая функция, дословный порт логики слияния из
-gigaam/vad_utils.py::segment_audio_file (_update_segments + цикл). Меняем только
-источник речевых интервалов: pyannote → Silero.
+`merge_intervals_to_chunks` is a pure function, a verbatim port of the merge logic from
+gigaam/vad_utils.py::segment_audio_file (_update_segments + loop). We only change the
+source of speech intervals: pyannote → Silero.
 
-Импорты silero/torch — ленивые (внутри функций), чтобы импорт модуля ради чистой
-функции чанкинга не тянул тяжёлый стек. Веса Silero бандлятся в пакете (без сети).
+silero/torch imports are lazy (inside functions) so that importing the module just for the
+pure chunking function does not pull in the heavy stack. Silero weights are bundled in the
+package (no network).
 """
 
 from __future__ import annotations
@@ -20,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 def load_vad() -> object:
-    """Загрузить Silero VAD один раз (JIT из бандла пакета; сеть/кэш не нужны).
+    """Load Silero VAD once (JIT from the package bundle; no network/cache needed).
 
-    Возвращаем непрозрачный handle (передаётся в `speech_intervals`); JIT-стек
-    тот же, что у GigaAM (torch) — без onnxruntime, чтобы не плодить пулы потоков
-    на слабых CPU (напр. ~4 ядра; см. ADR в CLAUDE.md).
+    We return an opaque handle (passed to `speech_intervals`); the JIT stack is
+    the same as GigaAM's (torch) — without onnxruntime, so as not to spawn thread pools
+    on weak CPUs (e.g. ~4 cores; see the ADR in CLAUDE.md).
     """
     from silero_vad import load_silero_vad
 
@@ -34,10 +35,10 @@ def load_vad() -> object:
 def speech_intervals(
     wav: Tensor, model: object, *, threshold: float, sampling_rate: int = 16000
 ) -> list[tuple[float, float]]:
-    """Вернуть речевые интервалы `(start, end)` в секундах через Silero.
+    """Return speech intervals `(start, end)` in seconds via Silero.
 
-    `wav` — float32 mono 16kHz (весь сигнал; пик памяти на этой стадии).
-    Формат идентичен pyannote: список `(start, end)` секунд.
+    `wav` is float32 mono 16kHz (the whole signal; memory peak at this stage).
+    The format is identical to pyannote: a list of `(start, end)` seconds.
     """
     from silero_vad import get_speech_timestamps
 
@@ -60,11 +61,11 @@ def merge_intervals_to_chunks(
     strict_limit: float,
     new_chunk_threshold: float,
 ) -> list[tuple[float, float]]:
-    """Слить речевые интервалы в чанки и вернуть их границы (секунды).
+    """Merge speech intervals into chunks and return their boundaries (seconds).
 
-    Порт `segment_audio_file` без среза waveform: чистая функция от интервалов и
-    параметров (нарезку срезов делает engine). Чанки длиннее `strict_limit`
-    режутся на равные части (`int(d/strict_limit)+1`), как в upstream.
+    A port of `segment_audio_file` without waveform slicing: a pure function of the intervals and
+    parameters (the engine does the slicing). Chunks longer than `strict_limit`
+    are cut into equal parts (`int(d/strict_limit)+1`), as in upstream.
     """
     boundaries: list[tuple[float, float]] = []
     curr_duration = 0.0

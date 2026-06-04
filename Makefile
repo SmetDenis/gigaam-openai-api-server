@@ -1,6 +1,6 @@
-# Makefile — команды разработки GigaAM ASR.
-# `make pre-commit` запускается ПОСЛЕ КАЖДОЙ ЗАДАЧИ и должен быть зелёным.
-# Это Makefile-цель, а не инструмент pre-commit.
+# Makefile — GigaAM ASR development commands.
+# `make pre-commit` runs AFTER EVERY TASK and must be green.
+# This is a Makefile target, not the pre-commit tool.
 
 HOST ?= 0.0.0.0
 PORT ?= 8000
@@ -10,19 +10,19 @@ IMAGE ?= gigaam-api:latest
 .PHONY: install run download-weights-local lint format format-check typecheck test test-integration coverage check pre-commit clean \
         build-docker up down logs download-weights
 
-install:  ## Установить зависимости (uv sync)
+install:  ## Install dependencies (uv sync)
 	uv sync
 
-run:  ## Локальный запуск сервиса (uvicorn --reload)
+run:  ## Local service run (uvicorn --reload)
 	uv run uvicorn gigaam_api.main:app --host $(HOST) --port $(PORT) --reload
 
-download-weights-local:  ## Прогрев весов нативно (uv, без Docker) в MODELS_DIR из .env
+download-weights-local:  ## Warm up weights natively (uv, no Docker) into MODELS_DIR from .env
 	uv run python -m gigaam_api.download_weights
 
 lint:  ## ruff check
 	uv run ruff check .
 
-format:  ## ruff format (применить)
+format:  ## ruff format (apply)
 	uv run ruff format .
 
 format-check:  ## ruff format --check
@@ -31,39 +31,39 @@ format-check:  ## ruff format --check
 typecheck:  ## mypy (strict)
 	uv run mypy gigaam_api tests
 
-test:  ## Юнит-тесты (без integration)
+test:  ## Unit tests (no integration)
 	uv run pytest -m "not integration"
 
-test-integration:  ## Интеграционные тесты (реальная модель/сеть). Код выхода 5 ("нет тестов") трактуем как успех.
+test-integration:  ## Integration tests (real model/network). Exit code 5 ("no tests") is treated as success.
 	uv run pytest -m integration || [ $$? -eq 5 ]
 
-coverage:  ## Отчёт покрытия (без гейта)
+coverage:  ## Coverage report (no gate)
 	uv run pytest -m "not integration" --cov=gigaam_api --cov-report=term-missing
 
-check: lint format-check typecheck test  ## Быстрый цикл: lint + format-check + mypy + unit
+check: lint format-check typecheck test  ## Fast loop: lint + format-check + mypy + unit
 
-pre-commit: lint format-check typecheck test test-integration  ## Вся пачка тестов всех типов подряд
+pre-commit: lint format-check typecheck test test-integration  ## The whole batch of all test types in a row
 
-clean:  ## Удалить кэши инструментов
+clean:  ## Remove tool caches
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage coverage.xml htmlcov
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 
-# --- Docker/деплой (этап 06) ---
-# Удобство для разработки на Mac. В проде деплой идёт через docker-compose.yml +
-# `docker compose` (без make). Прод-образ — linux/amd64 (на Mac собирается через
-# эмуляцию; на amd64-хосте — нативно).
+# --- Docker/deployment (stage 06) ---
+# A convenience for development on Mac. In production, deployment goes through docker-compose.yml +
+# `docker compose` (no make). The production image is linux/amd64 (built on Mac via
+# emulation; native on an amd64 host).
 
-build-docker:  ## Сборка прод-образа (linux/amd64)
+build-docker:  ## Build the production image (linux/amd64)
 	docker build --platform linux/amd64 -t $(IMAGE) .
 
-up:  ## docker compose up -d (поднять сервис)
+up:  ## docker compose up -d (start the service)
 	docker compose up -d
 
-down:  ## docker compose down (остановить сервис)
+down:  ## docker compose down (stop the service)
 	docker compose down
 
-logs:  ## docker compose logs -f (логи сервиса)
+logs:  ## docker compose logs -f (service logs)
 	docker compose logs -f
 
-download-weights:  ## Прогрев весов в ./models (разовый контейнер, без подъёма сервиса)
+download-weights:  ## Warm up weights into ./models (a one-off container, no service startup)
 	docker compose --profile tools run --rm download-weights

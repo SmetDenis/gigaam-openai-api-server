@@ -1,4 +1,4 @@
-"""GET /v1/models — список доступных моделей."""
+"""GET /v1/models — the list of available models."""
 
 import logging
 from typing import Annotated

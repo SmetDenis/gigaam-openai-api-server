@@ -1,7 +1,7 @@
 [project]
 name = "gigaam-api"
 version = "0.1.0"
-description = "OpenAI-совместимый сервис распознавания русской речи на базе GigaAM"
+description = "OpenAI-compatible Russian-speech recognition service built on GigaAM"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
@@ -37,12 +37,11 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-# Комментарии/докстринги/строки в проекте — на русском (конвенция).
-# RUF001/002/003 (ambiguous-unicode) дают ложные срабатывания на кириллицу — отключаем.
-ignore = ["RUF001", "RUF002", "RUF003"]
+# Project convention: comments, docstrings, and developer-facing strings are in English.
+# RUF001/002/003 (ambiguous-unicode) are enforced to catch accidental Cyrillic look-alikes.
 
 [tool.ruff.format]
-# Дефолтные настройки форматтера ruff.
+# Default ruff formatter settings.
 
 [tool.mypy]
 python_version = "3.12"
@@ -51,27 +50,27 @@ warn_unused_ignores = true
 disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
-# gigaam (git-зависимость) и silero-vad не поставляют type-стабов / py.typed.
-# Точечный ignore_missing_imports — идиоматичнее широкого `# type: ignore`.
+# gigaam (a git dependency) and silero-vad ship no type stubs / py.typed.
+# A targeted ignore_missing_imports is more idiomatic than a broad `# type: ignore`.
 [[tool.mypy.overrides]]
 module = ["gigaam.*", "silero_vad.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: требует реальной модели/сети"]
+markers = ["integration: requires a real model and/or network"]
 addopts = "-q --strict-markers"
 
 [tool.uv.sources]
 gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "6e4b027c6fb554e09e8b9059b757a175295ab879" }
-# torch/torchaudio: на Linux (Docker) — CPU-колёса из индекса PyTorch (без CUDA);
-# на macOS (dev) — дефолтные колёса PyPI (с MPS). Единый uv.lock покрывает обе платформы
-# через маркер платформы. См. ADR-лог в CLAUDE.md.
+# torch/torchaudio: on Linux (Docker) — CPU wheels from the PyTorch index (no CUDA);
+# on macOS (dev) — default PyPI wheels (with MPS). A single uv.lock covers both platforms
+# via the platform marker. See the ADR log in CLAUDE.md.
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
-# explicit = true → индекс используется ТОЛЬКО для torch/torchaudio (через sources выше);
-# остальные пакеты (onnxruntime и т.п. от gigaam) тянутся с обычного PyPI.
+# explicit = true → the index is used ONLY for torch/torchaudio (via the sources above);
+# all other packages (onnxruntime etc. pulled by gigaam) come from regular PyPI.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

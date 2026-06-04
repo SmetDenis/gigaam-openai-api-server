@@ -1,8 +1,8 @@
-"""OpenAI-совместимый формат ошибок + регистрация exception handlers.
+"""OpenAI-compatible error format + registration of exception handlers.
 
-Тело: {"error":{message,type,param,code}}. Маппинг кодов: битый файл→400,
-лимиты→400/413, инструмент не найден→500, очередь→503, auth→401,
-непредусмотренное→500. 415 не используется (OpenAI отдаёт 400).
+Body: {"error":{message,type,param,code}}. Code mapping: broken file→400,
+limits→400/413, tool not found→500, queue→503, auth→401,
+unexpected→500. 415 is not used (OpenAI returns 400).
 """
 
 import logging
@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
-    """Отсутствует/неверен Bearer-ключ (→ 401)."""
+    """Missing/invalid Bearer key (→ 401)."""
 
 
 class PayloadTooLargeError(Exception):
-    """Загрузка превысила MAX_UPLOAD_MB (→ 413)."""
+    """Upload exceeded MAX_UPLOAD_MB (→ 413)."""
 
 
 class OpenAIErrorDetail(BaseModel):
@@ -46,13 +46,13 @@ def error_response(
     param: str | None = None,
     code: str | None = None,
 ) -> JSONResponse:
-    """Собрать JSONResponse в OpenAI-формате ошибки."""
+    """Build a JSONResponse in the OpenAI error format."""
     body = OpenAIError(error=OpenAIErrorDetail(message=message, type=type_, param=param, code=code))
     return JSONResponse(status_code=status_code, content=body.model_dump())
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Зарегистрировать все обработчики на приложении."""
+    """Register all handlers on the application."""
 
     @app.exception_handler(AudioDecodeError)
     async def _decode(request: Request, exc: AudioDecodeError) -> JSONResponse:
@@ -68,7 +68,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AudioToolNotFoundError)
     async def _tool(request: Request, exc: AudioToolNotFoundError) -> JSONResponse:
-        logger.exception("инструмент аудио недоступен: %s", exc)
+        logger.exception("audio tool unavailable: %s", exc)
         return error_response(500, str(exc), "api_error")
 
     @app.exception_handler(QueueFullError)
@@ -90,5 +90,5 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("необработанная ошибка")
+        logger.exception("unhandled error")
         return error_response(500, "internal server error", "api_error")

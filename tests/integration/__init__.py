@@ -1,1 +1,1 @@
-"""Интеграционные тесты (маркер integration): реальная модель/сеть."""
+"""Integration tests (integration marker): real model/network."""

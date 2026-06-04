@@ -1,67 +1,67 @@
 # syntax=docker/dockerfile:1.7
-# GigaAM ASR — self-hosted образ (linux/amd64, CPU-only torch, БЕЗ весов в образе).
+# GigaAM ASR — self-hosted image (linux/amd64, CPU-only torch, NO weights in the image).
 #
-# Платформа задаётся на сборке (`docker build --platform linux/amd64 ...`, см. Makefile),
-# а НЕ хардкодом в FROM — так образ остаётся мультиарх-дружественным, а на amd64-хосте
-# собирается нативно. torch/torchaudio ставятся CPU-колёсами из индекса
-# download.pytorch.org/whl/cpu (через [tool.uv.sources] + маркер sys_platform=='linux'
-# в pyproject.toml) — без CUDA/nvidia-пакетов. Веса GigaAM качаются при первом старте
-# в смонтированный volume (MODELS_DIR=/data/models).
+# The platform is set at build time (`docker build --platform linux/amd64 ...`, see Makefile),
+# NOT hardcoded in FROM — this keeps the image multi-arch friendly, and on an amd64 host
+# it builds natively. torch/torchaudio are installed as CPU wheels from the index
+# download.pytorch.org/whl/cpu (via [tool.uv.sources] + the marker sys_platform=='linux'
+# in pyproject.toml) — without CUDA/nvidia packages. GigaAM weights are downloaded on first start
+# into the mounted volume (MODELS_DIR=/data/models).
 
-# ---- builder: ставим зависимости в изолированный /app/.venv через uv ----
+# ---- builder: install dependencies into an isolated /app/.venv via uv ----
 FROM python:3.12-slim AS builder
 
-# uv из официального образа (пин версии = воспроизводимость сборки).
+# uv from the official image (version pin = reproducible build).
 COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
 
-# git — для git-зависимости gigaam (uv клонирует репозиторий и собирает пакет).
+# git — for the git dependency gigaam (uv clones the repository and builds the package).
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git \
     && rm -rf /var/lib/apt/lists/*
 
-# UV_COMPILE_BYTECODE — .pyc на этапе сборки (быстрее старт); UV_LINK_MODE=copy — не hardlink
-# (кэш-маунт на другой ФС); UV_PYTHON_DOWNLOADS=0 — берём системный CPython базового образа.
+# UV_COMPILE_BYTECODE — .pyc at build time (faster start); UV_LINK_MODE=copy — no hardlinks
+# (the cache mount is on a different FS); UV_PYTHON_DOWNLOADS=0 — use the base image's system CPython.
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0
 
 WORKDIR /app
 
-# 1) Слой зависимостей: кэшируется, пока не изменятся pyproject.toml/uv.lock.
-#    --no-install-project — сам пакет ставим ниже, отдельным тонким слоём (после кода).
+# 1) Dependency layer: cached until pyproject.toml/uv.lock change.
+#    --no-install-project — the package itself is installed below, as a separate thin layer (after the code).
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
-# 2) Код приложения + установка самого пакета.
+# 2) Application code + installation of the package itself.
 COPY gigaam_api ./gigaam_api
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
-# ---- runtime: тонкий образ только с ffmpeg + готовым .venv ----
+# ---- runtime: thin image with only ffmpeg + the ready-made .venv ----
 FROM python:3.12-slim AS runtime
 
-# ffmpeg/ffprobe обязательны (декод аудио + probe длительности); ca-certificates — для
-# HTTPS-скачивания весов с CDN при первом старте.
+# ffmpeg/ffprobe are required (audio decode + duration probe); ca-certificates — for
+# HTTPS download of weights from the CDN on first start.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Непривилегированный пользователь с фиксированным UID/GID 1000. ВАЖНО: хостовый каталог
-# ./models, монтируемый в /data/models, должен принадлежать UID 1000 (chown 1000:1000),
-# иначе non-root не сможет записать веса в volume. См. README → «Деплой (Docker Compose)».
+# Unprivileged user with a fixed UID/GID 1000. IMPORTANT: the host directory
+# ./models, mounted into /data/models, must be owned by UID 1000 (chown 1000:1000),
+# otherwise non-root cannot write weights to the volume. See README → "Deploy (Docker Compose)".
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin app
 
-# PATH на .venv; MODELS_DIR — кэш весов GigaAM (volume); XDG_CACHE_HOME в volume — защитная
-# сеть, чтобы любой случайный кэш не утыкался в недоступный non-root ~/.cache (Silero
-# бандлится в пакете, HF Hub/torch.hub проект не использует).
+# PATH to .venv; MODELS_DIR — GigaAM weights cache (volume); XDG_CACHE_HOME in the volume — a safety
+# net so that any accidental cache does not hit the non-root-inaccessible ~/.cache (Silero
+# is bundled in the package, the project uses no HF Hub/torch.hub).
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     MODELS_DIR=/data/models \
     XDG_CACHE_HOME=/data/models/.cache
 
-# Точка монтирования volume; владелец — app (UID 1000), чтобы non-root мог писать веса.
+# Volume mount point; owner — app (UID 1000), so non-root can write weights.
 RUN mkdir -p /data/models && chown -R 1000:1000 /data/models
 
 WORKDIR /app
@@ -71,11 +71,11 @@ COPY --from=builder --chown=1000:1000 /app/gigaam_api /app/gigaam_api
 USER 1000
 EXPOSE 8000
 
-# Healthcheck без curl (его нет в slim) — тонкий запрос к /health через stdlib urllib.
-# start-period щедрый: первый старт может качать веса (на медленном канале — минуты),
-# до их загрузки uvicorn ещё не отвечает. В compose start_period задаётся отдельно.
+# Healthcheck without curl (it is not in slim) — a thin request to /health via stdlib urllib.
+# start-period is generous: the first start may download weights (minutes on a slow link),
+# until they are loaded uvicorn does not yet respond. In compose start_period is set separately.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=5 \
     CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
 
-# Прод-запуск: без --reload.
+# Production run: without --reload.
 CMD ["uvicorn", "gigaam_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

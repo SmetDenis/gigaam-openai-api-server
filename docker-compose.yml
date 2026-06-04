@@ -1,10 +1,10 @@
-# GigaAM ASR — деплой через Docker Compose (self-hosted: Linux-сервер / NAS / мини-ПК).
+# GigaAM ASR — deployment via Docker Compose (self-hosted: Linux server / NAS / mini-PC).
 #
-# Запуск: `docker compose up -d --build` (UI управления контейнерами тоже подойдёт). Перед стартом:
-#   1) Создайте рядом файл `.env` (см. .env.example) и задайте API_KEY.
-#   2) Создайте каталог ./models и сделайте его владельцем UID 1000 (chown 1000:1000 ./models),
-#      иначе non-root в контейнере не запишет туда веса. См. README → «Деплой (Docker Compose)».
-# Первый старт скачивает веса GigaAM в ./models (минуты) → затем healthcheck станет healthy.
+# Run: `docker compose up -d --build` (a container-management UI works too). Before starting:
+#   1) Create a `.env` file alongside (see .env.example) and set API_KEY.
+#   2) Create the ./models directory and make UID 1000 its owner (chown 1000:1000 ./models),
+#      otherwise non-root in the container cannot write weights there. See README → "Deployment (Docker Compose)".
+# The first start downloads the GigaAM weights into ./models (minutes) → then the healthcheck becomes healthy.
 
 services:
   gigaam-api:
@@ -13,36 +13,36 @@ services:
       dockerfile: Dockerfile
     image: gigaam-api:latest
     container_name: gigaam-api
-    # required: false → без .env сервис стартует на дефолтах (config.py); для прода
-    # создайте .env (см. .env.example) и задайте API_KEY — он подхватится автоматически.
+    # required: false → without .env the service starts on defaults (config.py); for production
+    # create .env (see .env.example) and set API_KEY — it is picked up automatically.
     env_file:
       - path: .env
         required: false
     ports:
       - "8000:8000"
     volumes:
-      # Кэш весов переживает пересоздание контейнера; первый старт качает сюда веса.
+      # The weights cache survives container re-creation; the first start downloads the weights here.
       - ./models:/data/models
     restart: unless-stopped
     healthcheck:
-      # Без curl (нет в slim) — stdlib urllib, exec-форма CMD. start_period щедрый под
-      # скачивание весов на первом старте: до их загрузки uvicorn ещё не отвечает.
+      # Without curl (absent in slim) — stdlib urllib, exec-form CMD. start_period is generous for
+      # the weights download on the first start: until they load uvicorn does not respond yet.
       test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 600s
 
-    # --- Лимиты ресурсов (типичный self-hosted хост: ~4 ядра / 8 ГБ) ---
-    # Подберите под своё железо. Надёжнее работают top-level mem_limit/cpus
-    # (Compose-спецификация v2), чем deploy.resources (Swarm). Раскомментируйте при нужде:
+    # --- Resource limits (a typical self-hosted host: ~4 cores / 8 GB) ---
+    # Tune to your hardware. The top-level mem_limit/cpus work more reliably
+    # (Compose specification v2) than deploy.resources (Swarm). Uncomment if needed:
     # mem_limit: 6g
     # cpus: 4.0
-    # NUM_THREADS в .env держите ≤ числу выделенных ядер (torch.set_num_threads).
+    # Keep NUM_THREADS in .env ≤ the number of allocated cores (torch.set_num_threads).
 
-  # --- Опциональный прогрев весов (НЕ стартует с `up`; только по профилю `tools`) ---
-  # Заранее скачать веса в ./models без подъёма HTTP-сервиса (полезно для медленного/офлайн
-  # хоста). Запуск: docker compose --profile tools run --rm download-weights
+  # --- Optional weights warm-up (does NOT start with `up`; only via the `tools` profile) ---
+  # Pre-download the weights into ./models without bringing up the HTTP service (useful for a slow/offline
+  # host). Run: docker compose --profile tools run --rm download-weights
   download-weights:
     build:
       context: .

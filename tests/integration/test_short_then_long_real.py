@@ -1,12 +1,13 @@
-"""Регрессия: на ОДНОМ инстансе движка короткий запрос не должен ломать longform.
+"""Regression: on a SINGLE engine instance a short request must not break longform.
 
-Воспроизводит баг живого сервиса: `gigaam.transcribe` (короткий путь) обёрнут в
-`@torch.inference_mode()` и кэширует rotary `cos`/`sin` энкодера как inference-тензоры;
-наш longform зовёт `forward`/`_decode` напрямую и без собственной `inference_mode`-обёртки
-падал на этом кэше с `RuntimeError: Inference tensors cannot be saved for backward`.
+Reproduces a live-service bug: `gigaam.transcribe` (the short path) is wrapped in
+`@torch.inference_mode()` and caches the encoder's rotary `cos`/`sin` as inference tensors;
+our longform calls `forward`/`_decode` directly and, without its own `inference_mode` wrapper,
+failed on this cache with `RuntimeError: Inference tensors cannot be saved for backward`.
 
-Другие integration-тесты используют ОТДЕЛЬНЫЙ инстанс на файл → баг не ловили. Здесь
-намеренно один движок и порядок short→long (как в живом сервисе с единственной моделью).
+Other integration tests use a SEPARATE instance per file → they did not catch the bug. Here
+we deliberately use one engine and the short→long order (as in the live service with a
+single model).
 """
 
 from pathlib import Path
@@ -26,22 +27,22 @@ _LONG = Path(__file__).parent / "data" / "ru_long_sample.wav"
 @pytest.fixture
 def engine(tmp_path_factory: pytest.TempPathFactory) -> GigaAMEngine:
     if not (_SHORT.exists() and _LONG.exists()):
-        pytest.skip("нет тест-сэмплов (short и/или long)")
+        pytest.skip("no test samples (short and/or long)")
     cache = tmp_path_factory.mktemp("models")
     settings = Settings(MODEL="v3_ctc", DEVICE="cpu", MODELS_DIR=cache)
     try:
         return GigaAMEngine(settings)
-    except Exception as exc:  # нет сети / CDN недоступен / веса не скачались
-        pytest.skip(f"модель недоступна (нет сети/весов): {exc}")
+    except Exception as exc:  # no network / CDN unavailable / weights failed to download
+        pytest.skip(f"model unavailable (no network/weights): {exc}")
 
 
 def test_short_then_long_same_engine(engine: GigaAMEngine) -> None:
-    # Короткий путь (gigaam.transcribe под inference_mode) «отравляет» кэш rotary cos/sin.
+    # The short path (gigaam.transcribe under inference_mode) "poisons" the rotary cos/sin cache.
     short = engine.transcribe(str(_SHORT), word_timestamps=False)
-    assert short.text.strip(), "ожидали непустой короткий транскрипт"
+    assert short.text.strip(), "expected a non-empty short transcript"
 
-    # Longform на ТОМ ЖЕ инстансе не должен падать на inference-тензорах кэша.
+    # Longform on the SAME instance must not fail on the cache's inference tensors.
     long = engine.transcribe(str(_LONG), word_timestamps=False)
     assert isinstance(long, ASRResult)
-    assert long.text.strip(), "ожидали непустой longform-транскрипт"
-    assert len(long.segments) > 1, "длинное аудио должно дать несколько сегментов"
+    assert long.text.strip(), "expected a non-empty longform transcript"
+    assert len(long.segments) > 1, "long audio should yield several segments"

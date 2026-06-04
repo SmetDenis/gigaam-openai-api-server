@@ -1,4 +1,4 @@
-"""Тесты GET /v1/models: список ALLOWED_MODELS в OpenAI-формате + auth."""
+"""GET /v1/models tests: ALLOWED_MODELS list in OpenAI format + auth."""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

@@ -1,8 +1,8 @@
-"""Интеграция: SSE-стрим на реальной модели v3_ctc + длинный сэмпл (~40с).
+"""Integration: SSE stream on the real v3_ctc model + a long sample (~40s).
 
-End-to-end через HTTP: POST stream=true → собираем SSE-события → склеенный текст из
-`transcript.text.done` обязан совпасть с синхронным `transcribe` на том же файле.
-DEVICE=cpu — детерминизм greedy-декода. Грейсфул-skip без сети/весов.
+End-to-end over HTTP: POST stream=true → collect SSE events → the concatenated text from
+`transcript.text.done` must match the synchronous `transcribe` on the same file.
+DEVICE=cpu — determinism of greedy decoding. Graceful skip without network/weights.
 """
 
 import json
@@ -28,13 +28,13 @@ _SAMPLE = Path(__file__).parent / "data" / "ru_long_sample.wav"
 @pytest.fixture(scope="module")
 def engine(tmp_path_factory: pytest.TempPathFactory) -> GigaAMEngine:
     if not _SAMPLE.exists():
-        pytest.skip(f"нет длинного тест-сэмпла: {_SAMPLE}")
+        pytest.skip(f"no long test sample: {_SAMPLE}")
     cache = tmp_path_factory.mktemp("models")
     settings = Settings(MODEL="v3_ctc", DEVICE="cpu", MODELS_DIR=cache)
     try:
         return GigaAMEngine(settings)
-    except Exception as exc:  # нет сети / CDN недоступен / веса не скачались
-        pytest.skip(f"модель недоступна (нет сети/весов): {exc}")
+    except Exception as exc:  # no network / CDN unavailable / weights not downloaded
+        pytest.skip(f"model unavailable (no network/weights): {exc}")
 
 
 @pytest.fixture
@@ -80,6 +80,6 @@ def test_stream_done_text_matches_sync(engine: GigaAMEngine, client: TestClient)
     done = next(p for p in payloads if isinstance(p, dict) and p["type"].endswith(".done"))
 
     assert payloads[-1] == "[DONE]"
-    assert len(deltas) > 1, "длинное аудио должно дать несколько delta-сегментов"
-    # Инвариант: склейка delta == done.text == синхронному результату.
+    assert len(deltas) > 1, "long audio must produce several delta segments"
+    # Invariant: concatenated delta == done.text == the synchronous result.
     assert "".join(deltas) == done["text"] == reference

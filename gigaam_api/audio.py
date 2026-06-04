@@ -1,11 +1,11 @@
-"""Работа с аудио: probe длительности (ffprobe) и декод в int16 16k mono (ffmpeg).
+"""Audio handling: duration probe (ffprobe) and decode to int16 16k mono (ffmpeg).
 
-Короткий путь распознавания делегирует декод самому gigaam (`model.transcribe`
-внутри зовёт ffmpeg, см. gigaam/preprocess.py::load_audio). Longform-путь декодит
-сам через `decode_to_int16_16k_mono` (int16 экономит память на длинных файлах).
+The short recognition path delegates decoding to gigaam itself (`model.transcribe`
+calls ffmpeg internally, see gigaam/preprocess.py::load_audio). The longform path
+decodes on its own via `decode_to_int16_16k_mono` (int16 saves memory on long files).
 
-torch импортируется **лениво** внутри `decode_to_int16_16k_mono`: модуль остаётся
-torch-free, чтобы импорт audio.py из HTTP-слоя не тянул torch.
+torch is imported **lazily** inside `decode_to_int16_16k_mono`: the module stays
+torch-free so that importing audio.py from the HTTP layer does not pull in torch.
 """
 
 from __future__ import annotations
@@ -22,19 +22,19 @@ logger = logging.getLogger(__name__)
 
 
 class AudioDecodeError(Exception):
-    """Не удалось прочитать/декодировать аудио (битый/неподдерживаемый файл)."""
+    """Failed to read/decode audio (broken/unsupported file)."""
 
 
 class AudioToolNotFoundError(Exception):
-    """ffprobe/ffmpeg не найден в PATH — серверная проблема окружения (→ 500)."""
+    """ffprobe/ffmpeg not found in PATH — a server-side environment problem (→ 500)."""
 
 
 def probe_duration(path: str) -> float:
-    """Вернуть длительность аудио в секундах через `ffprobe`.
+    """Return the audio duration in seconds via `ffprobe`.
 
-    ffprobe надёжно определяет длительность для любых форматов, поддерживаемых
-    ffmpeg. Любой сбой (нет файла, битый ввод, неизвестная длительность) →
-    AudioDecodeError, чтобы не пробрасывать сырые ошибки subprocess.
+    ffprobe reliably determines the duration for any format supported by
+    ffmpeg. Any failure (missing file, broken input, unknown duration) →
+    AudioDecodeError, so that raw subprocess errors are not propagated.
     """
     cmd = [
         "ffprobe",
@@ -49,28 +49,28 @@ def probe_duration(path: str) -> float:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except FileNotFoundError as exc:
-        raise AudioToolNotFoundError("ffprobe не найден в PATH") from exc
+        raise AudioToolNotFoundError("ffprobe not found in PATH") from exc
     except subprocess.CalledProcessError as exc:
-        logger.warning("ffprobe не смог прочитать аудио: %s", path)
-        raise AudioDecodeError(f"не удалось прочитать аудио: {path}") from exc
+        logger.warning("ffprobe could not read audio: %s", path)
+        raise AudioDecodeError(f"failed to read audio: {path}") from exc
 
     raw = proc.stdout.strip()
     try:
         duration = float(raw)
     except ValueError as exc:
-        raise AudioDecodeError(f"ffprobe вернул некорректную длительность: {raw!r}") from exc
+        raise AudioDecodeError(f"ffprobe returned an invalid duration: {raw!r}") from exc
 
     logger.debug("probe_duration %s -> %.3fs", path, duration)
     return duration
 
 
 def decode_to_int16_16k_mono(path: str) -> Tensor:
-    """Декодировать аудио в 1-D **int16** torch.Tensor (16kHz mono) через ffmpeg.
+    """Decode audio into a 1-D **int16** torch.Tensor (16kHz mono) via ffmpeg.
 
-    Как gigaam `load_audio`, но возвращаем int16 (а не float): на длинных файлах это
-    вдвое экономит память (~1.15 ГБ/10ч против 2.3 ГБ во float). Во float конвертируем
-    срез-по-чанку при батчинге. Тензор read-only (делит память с буфером ffmpeg) —
-    инференс делает копии (`.float()`), сам буфер не мутируем.
+    Like gigaam `load_audio`, but we return int16 (not float): on long files this
+    halves memory usage (~1.15 GB/10h versus 2.3 GB in float). We convert to float
+    chunk-by-chunk during batching. The tensor is read-only (shares memory with the
+    ffmpeg buffer) — inference makes copies (`.float()`), the buffer itself is not mutated.
     """
     import torch
 
@@ -94,13 +94,13 @@ def decode_to_int16_16k_mono(path: str) -> Tensor:
     try:
         raw = subprocess.run(cmd, capture_output=True, check=True).stdout
     except FileNotFoundError as exc:
-        raise AudioToolNotFoundError("ffmpeg не найден в PATH") from exc
+        raise AudioToolNotFoundError("ffmpeg not found in PATH") from exc
     except subprocess.CalledProcessError as exc:
-        logger.warning("ffmpeg не смог декодировать аудио: %s", path)
-        raise AudioDecodeError(f"не удалось декодировать аудио: {path}") from exc
+        logger.warning("ffmpeg could not decode audio: %s", path)
+        raise AudioDecodeError(f"failed to decode audio: {path}") from exc
 
     with warnings.catch_warnings():
-        # torch.frombuffer на bytes даёт read-only тензор → UserWarning, как в gigaam.
+        # torch.frombuffer on bytes yields a read-only tensor → UserWarning, as in gigaam.
         warnings.simplefilter("ignore", category=UserWarning)
         wav: Tensor = torch.frombuffer(raw, dtype=torch.int16)
 

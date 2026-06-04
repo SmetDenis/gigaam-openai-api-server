@@ -1,15 +1,16 @@
-"""POST /v1/audio/transcriptions — OpenAI-совместимый эндпоинт (sync + SSE-стриминг).
+"""POST /v1/audio/transcriptions — OpenAI-compatible endpoint (sync + SSE streaming).
 
-Upload пишем на диск чанками (не грузить весь файл в RAM); инференс —
-через Runner (сериализация + backpressure).
+The upload is written to disk in chunks (do not load the whole file into RAM); inference —
+via the Runner (serialization + backpressure).
 
-Две ветки:
-- `stream=true` И формат ∈ {json,text} → SSE: сегменты по мере готовности (delta) →
-  done → [DONE]. backpressure (try_acquire→503) проверяется ДО StreamingResponse;
-  владение temp-файлом передаётся стриму (cleanup в on_done, когда воркер свободен).
-- иначе (sync, либо verbose/srt/vtt+stream → синхронный фоллбэк) → полный ответ.
-  Отмена longform — кооперативная: watcher на request.is_disconnected() ставит
-  threading.Event, прокинутый как cancel_check; в стриме отмену даёт сам StreamingResponse.
+Two branches:
+- `stream=true` AND format ∈ {json,text} → SSE: segments as they become ready (delta) →
+  done → [DONE]. backpressure (try_acquire→503) is checked BEFORE StreamingResponse;
+  temp-file ownership is handed to the stream (cleanup in on_done, once the worker is free).
+- otherwise (sync, or verbose/srt/vtt+stream → synchronous fallback) → full response.
+  Longform cancellation is cooperative: a watcher on request.is_disconnected() sets a
+  threading.Event passed in as cancel_check; in the stream cancellation comes from
+  StreamingResponse itself.
 """
 
 import asyncio
@@ -45,16 +46,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _VALID_FORMATS = {"json", "text", "verbose_json", "srt", "vtt"}
-_CHUNK = 1 << 20  # 1 МиБ
+_CHUNK = 1 << 20  # 1 MiB
 
 
 async def _watch_disconnect(request: Request, event: threading.Event) -> None:
-    """Опрашивать disconnect клиента; при отключении — выставить флаг отмены.
+    """Poll the client's disconnect; on disconnect — set the cancellation flag.
 
-    Запускается ТОЛЬКО как дочерняя задача anyio task group и снимается через
-    `cancel_scope.cancel()`. Использовать raw `asyncio.create_task` + `task.cancel()`
-    НЕЛЬЗЯ: `Request.is_disconnected()` внутри держит `anyio.CancelScope`, и raw-отмена
-    с ней конфликтует — задача не завершается, `await task` дедлочит (ADR этапа 04).
+    Runs ONLY as a child task of an anyio task group and is torn down via
+    `cancel_scope.cancel()`. Using raw `asyncio.create_task` + `task.cancel()`
+    is NOT allowed: `Request.is_disconnected()` holds an `anyio.CancelScope` inside, and raw
+    cancellation conflicts with it — the task never finishes, `await task` deadlocks (stage-04 ADR).
     """
     while not await request.is_disconnected():
         await anyio.sleep(1.0)
@@ -62,7 +63,7 @@ async def _watch_disconnect(request: Request, event: threading.Event) -> None:
 
 
 def _render(result: ASRResult, fmt: str, granularities: set[str], request_id: str) -> Response:
-    """Отрендерить ASRResult в ответ по формату (fmt уже провалидирован вызывающим)."""
+    """Render an ASRResult into a response by format (fmt is already validated by the caller)."""
     logger.debug("request_id=%s render format=%s chars=%d", request_id, fmt, len(result.text))
     if fmt == "json":
         return JSONResponse(content=formats.to_json(result))
@@ -87,10 +88,10 @@ async def transcriptions(
     timestamp_granularities: Annotated[
         list[str] | None, Form(alias="timestamp_granularities[]")
     ] = None,
-    language: Annotated[str | None, Form()] = None,  # принимается и игнорируется (GigaAM — RU)
-    stream: Annotated[bool, Form()] = False,  # json/text → SSE; verbose/srt/vtt → sync-фоллбэк
-    prompt: Annotated[str | None, Form()] = None,  # принимается и игнорируется
-    temperature: Annotated[float | None, Form()] = None,  # принимается и игнорируется
+    language: Annotated[str | None, Form()] = None,  # accepted and ignored (GigaAM — RU)
+    stream: Annotated[bool, Form()] = False,  # json/text → SSE; verbose/srt/vtt → sync fallback
+    prompt: Annotated[str | None, Form()] = None,  # accepted and ignored
+    temperature: Annotated[float | None, Form()] = None,  # accepted and ignored
 ) -> Response:
     request_id = uuid.uuid4().hex
     fmt = response_format or settings.DEFAULT_RESPONSE_FORMAT
@@ -121,7 +122,7 @@ async def transcriptions(
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
     size = 0
     tmp_path: str | None = None
-    streamed = False  # True → владение temp-файлом передано стриму (его cleanup в on_done)
+    streamed = False  # True → temp-file ownership handed to the stream (its cleanup in on_done)
     try:
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp_path = tmp.name
@@ -153,15 +154,17 @@ async def transcriptions(
         engine = cast(ASREngine, request.app.state.engine)
         runner = cast(Runner, request.app.state.runner)
 
-        # SSE-стриминг только для json/text; verbose/srt/vtt при stream=true → синхронный
-        # фоллбэк (полный результат), не 400 (толерантнее к клиентам, ADR этапа 05).
+        # SSE streaming only for json/text; verbose/srt/vtt with stream=true → synchronous
+        # fallback (full result), not 400 (more tolerant of clients, stage-05 ADR).
         if stream and fmt in {"json", "text"}:
-            assert tmp_path is not None  # upload записал файл выше
+            assert tmp_path is not None  # the upload wrote the file above
             path = tmp_path
 
-            # backpressure ДО StreamingResponse: 503 уйдёт без заголовков (иначе стрим уже 200).
+            # backpressure BEFORE StreamingResponse: the 503 goes out without headers
+            # (otherwise the stream is already 200).
             runner.try_acquire()
-            streamed = True  # с этого момента temp-файл принадлежит стриму (cleanup в _cleanup)
+            # from this point the temp-file belongs to the stream (cleanup in _cleanup)
+            streamed = True
             cancel_event = threading.Event()
 
             def _make_iter() -> Iterator[SegmentTS]:
@@ -170,12 +173,12 @@ async def transcriptions(
                 )
 
             def _cleanup() -> None:
-                # Вызывается, когда продюсер реально завершился (воркер свободен).
+                # Called once the producer has actually finished (the worker is free).
                 runner.release()
                 with contextlib.suppress(OSError):
                     os.unlink(path)
                 logger.debug(
-                    "request_id=%s stream cleanup: слот освобождён, temp удалён", request_id
+                    "request_id=%s stream cleanup: slot released, temp removed", request_id
                 )
 
             segments = stream_segments(
@@ -193,11 +196,11 @@ async def transcriptions(
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
-        # --- Синхронная ветка (stream=false ИЛИ verbose/srt/vtt → фоллбэк) ---
-        # Watcher disconnect'а и инференс — в одной anyio task group: при отключении
-        # клиента watcher ставит cancel_event, longform прерывается между батчами.
-        # Исход инференса захватываем ВНУТРИ группы и диспетчеризуем СНАРУЖИ, чтобы
-        # исключения (напр. QueueFullError→503) не оборачивались в ExceptionGroup.
+        # --- Synchronous branch (stream=false OR verbose/srt/vtt → fallback) ---
+        # The disconnect watcher and the inference run in one anyio task group: when the
+        # client disconnects the watcher sets cancel_event, and longform stops between batches.
+        # We capture the inference outcome INSIDE the group and dispatch it OUTSIDE so that
+        # exceptions (e.g. QueueFullError→503) are not wrapped in an ExceptionGroup.
         cancel_event = threading.Event()
         result: ASRResult | None = None
         inference_error: BaseException | None = None
@@ -210,20 +213,22 @@ async def transcriptions(
                     word_timestamps=word_timestamps,
                     cancel_check=cancel_event.is_set,
                 )
-            except Exception as exc:  # захватываем, чтобы снять watcher и не плодить ExceptionGroup
+            # capture it to tear down the watcher and avoid an ExceptionGroup
+            except Exception as exc:
                 inference_error = exc
             finally:
                 tg.cancel_scope.cancel()
 
         if isinstance(inference_error, InferenceCancelledError):
-            logger.info("request_id=%s инференс отменён (клиент отключился)", request_id)
+            logger.info("request_id=%s inference cancelled (client disconnected)", request_id)
             return Response(status_code=499)
         if inference_error is not None:
             raise inference_error
         assert result is not None
         return _render(result, fmt, granularities, request_id)
     finally:
-        # При стриме temp-файл нужен воркеру после возврата handler'а — его удалит _cleanup.
+        # When streaming, the temp-file is needed by the worker after the handler returns;
+        # _cleanup will delete it.
         if tmp_path is not None and not streamed:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_path)

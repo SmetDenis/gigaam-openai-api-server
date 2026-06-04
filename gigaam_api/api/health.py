@@ -1,8 +1,8 @@
-"""GET /health — статус сервиса.
+"""GET /health — service status.
 
-Если модель загружена (lifespan создал движок в app.state.engine) — отдаём её
-реальные model/device и loaded=true. Иначе (движок не поднят) — эхо настроек,
-loaded=false. Тип движка сужаем через isinstance(ASREngine), не импортируя gigaam.
+If the model is loaded (the lifespan created the engine in app.state.engine) — we return its
+real model/device and loaded=true. Otherwise (the engine is not up) — echo the settings,
+loaded=false. We narrow the engine type via isinstance(ASREngine), without importing gigaam.
 """
 
 import logging
@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 class HealthResponse(BaseModel):
-    # Разрешаем поле `model` (по умолчанию pydantic защищает namespace `model_`).
+    # Allow the `model` field (by default pydantic protects the `model_` namespace).
     model_config = ConfigDict(protected_namespaces=())
 
     status: str

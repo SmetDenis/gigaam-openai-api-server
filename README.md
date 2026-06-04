@@ -1,6 +1,6 @@
 # GigaAM ASR — OpenAI-compatible Russian speech recognition service
 
-> **Languages:** **English** · [Русский](README_ru.md)
+> **Languages:** **English** · [Russian](README_ru.md)
 
 A self-hosted ASR server built on [GigaAM](https://github.com/salute-developers/GigaAM),
 exposing an **OpenAI-compatible** API (`POST /v1/audio/transcriptions`). Any client that can talk to

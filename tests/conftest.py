@@ -1,4 +1,4 @@
-"""Общие фикстуры тестов: изоляция Settings от ambient-окружения и состояния logging."""
+"""Shared test fixtures: isolate Settings from the ambient environment and logging state."""
 
 import logging
 from collections.abc import Iterator
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-# Все переменные окружения, которые читает Settings.
+# All environment variables that Settings reads.
 _SETTINGS_ENV_VARS = (
     "MODEL",
     "DEVICE",
@@ -34,8 +34,8 @@ _SETTINGS_ENV_VARS = (
 
 @pytest.fixture(autouse=True)
 def _isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
-    """Изолировать Settings: работаем из пустого каталога (нет ambient `.env`),
-    очищаем все переменные окружения сервиса и кэш get_settings."""
+    """Isolate Settings: run from an empty directory (no ambient `.env`),
+    clear all of the service's environment variables and the get_settings cache."""
     monkeypatch.chdir(tmp_path)
     for var in _SETTINGS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -48,8 +48,8 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterat
 
 @pytest.fixture(autouse=True)
 def _restore_logging() -> Iterator[None]:
-    """Снимок и восстановление состояния root-логгера, чтобы setup_logging
-    в одном тесте не протекал в другие."""
+    """Snapshot and restore the root logger's state so that setup_logging
+    in one test does not leak into others."""
     root = logging.getLogger()
     saved_handlers = root.handlers[:]
     saved_level = root.level
