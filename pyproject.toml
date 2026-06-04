@@ -61,6 +61,15 @@ testpaths = ["tests"]
 markers = ["integration: requires a real model and/or network"]
 addopts = "-q --strict-markers"
 
+[tool.uv]
+# onnx is pulled in transitively by gigaam, which hard-pins onnx==1.19.* in its own
+# metadata. That old onnx has open high/medium GHSA advisories (all fixed in 1.21.0), and
+# Dependabot security updates cannot bump it (the pin makes the resolution unsatisfiable →
+# the Dependabot job fails on every run). We override the version here: gigaam never does a
+# bare `import onnx` (only onnxruntime + torch.onnx.export), and this service never calls
+# ONNX export, so forcing a newer onnx is safe. See the ADR log in CLAUDE.md.
+override-dependencies = ["onnx>=1.21.0"]
+
 [tool.uv.sources]
 gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "6e4b027c6fb554e09e8b9059b757a175295ab879" }
 # torch/torchaudio: on Linux (Docker) — CPU wheels from the PyTorch index (no CUDA);
