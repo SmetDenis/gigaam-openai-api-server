@@ -248,7 +248,7 @@ OpenAI-формат `{"error":{message,type,param,code}}`. Коды:
 | `VAD_MAX_DURATION` | float | `22.0` | Чанкинг: целевой максимум, сек. |
 | `VAD_STRICT_LIMIT` | float | `30.0` | Чанкинг: жёсткий максимум, сек. |
 | `VAD_NEW_CHUNK_THRESHOLD` | float | `0.2` | Чанкинг: порог нового чанка, сек. |
-| `VAD_THRESHOLD` | float | `0.5` | Silero: порог вероятности речи. |
+| `VAD_THRESHOLD` | float | `0.25` | Silero: порог вероятности речи. Ниже = меньше ложных пауз, больше контекста на чанк, ниже WER (оптимум 0.2–0.3; не ниже 0.2). |
 | `HOST` | str | `0.0.0.0` | Хост uvicorn. |
 | `PORT` | int | `8000` | Порт. |
 | `LOG_LEVEL` | str | `INFO` | `DEBUG`\|`INFO`\|`WARNING`\|`ERROR`. |

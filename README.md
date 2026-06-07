@@ -251,7 +251,7 @@ All settings are read from `.env` (`pydantic-settings`). Example — `.env.examp
 | `VAD_MAX_DURATION` | float | `22.0` | Chunking: target maximum, sec. |
 | `VAD_STRICT_LIMIT` | float | `30.0` | Chunking: hard maximum, sec. |
 | `VAD_NEW_CHUNK_THRESHOLD` | float | `0.2` | Chunking: new-chunk threshold, sec. |
-| `VAD_THRESHOLD` | float | `0.5` | Silero: speech probability threshold. |
+| `VAD_THRESHOLD` | float | `0.25` | Silero: speech probability threshold. Lower = fewer false pauses, more context per chunk, lower WER (best 0.2–0.3; do not go below 0.2). |
 | `HOST` | str | `0.0.0.0` | uvicorn host. |
 | `PORT` | int | `8000` | Port. |
 | `LOG_LEVEL` | str | `INFO` | `DEBUG`\|`INFO`\|`WARNING`\|`ERROR`. |

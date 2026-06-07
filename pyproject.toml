@@ -1,6 +1,6 @@
 [project]
 name = "gigaam-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenAI-compatible Russian-speech recognition service built on GigaAM"
 requires-python = ">=3.12,<3.13"
 dependencies = [

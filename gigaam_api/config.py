@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     VAD_MAX_DURATION: float = 22.0
     VAD_STRICT_LIMIT: float = 30.0
     VAD_NEW_CHUNK_THRESHOLD: float = 0.2
-    VAD_THRESHOLD: float = 0.5
+    # Lower = fewer false pauses, more context per chunk -> lower WER (empirically best 0.2-0.3
+    # on clean and noisy RU speech). Do not go below 0.2: at ~0.1 VAD stops seeing pauses and
+    # >30s blocks appear, which cause mid-word arithmetic cuts.
+    VAD_THRESHOLD: float = 0.25
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
