@@ -84,9 +84,10 @@ class GigaAMEngine:
         )
         self._vad = load_vad()  # Silero JIT from the bundle (no network), once
         logger.info(
-            "model loaded: %s device=%s cache=%s in %.1fs",
+            "model loaded: %s device=%s threads=%d cache=%s in %.1fs",
             self.model_name,
             self.device,
+            torch.get_num_threads(),
             settings.MODELS_DIR,
             time.perf_counter() - t0,
         )

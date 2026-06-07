@@ -22,6 +22,12 @@ source of truth for behaviour is the code itself.
 6. **MPS on Mac** may need `PYTORCH_ENABLE_MPS_FALLBACK=1` (GigaAM on MPS is untested upstream).
 7. **The service is batch, not realtime:** 10h of audio = hours of CPU compute (min 2 cores,
    recommended 4). Long files — via `stream=true`.
+8. **`load_vad()` must restore the torch thread count.** Silero runs `torch.set_num_threads(1)`
+   at import (`silero_vad/model.py`, module level), which would silently pin ALL inference to one
+   thread (`NUM_THREADS` ignored, ~3.3× slower on a 4-core CPU). `load_vad` saves/restores the
+   count so loading the VAD has no global side effect; locked by
+   `tests/unit/test_vad_silero.py::test_load_vad_restores_torch_thread_count`. Effective threads
+   are logged at engine load (`threads=N`) to catch any regression.
 
 ## Commands (Makefile)
 
@@ -108,6 +114,7 @@ Key vars: `MODEL` (`v3_ctc`), `API_KEY` (empty ⇒ auth off), `DEVICE` (`auto`�
 | Project language — **English** (comments/docstrings/log + error messages); ruff RUF001/002/003 enabled | RU README is `README_ru.md`. RU **speech transcripts** in tests are kept as ASR test data; mixed VTT/SRT lines carry a per-line `# noqa: RUF001`. |
 | **`VAD_THRESHOLD` default 0.5 → 0.25** | Empirical (pooled WER over 14 FLEURS-ru files, clean + noise 15/5dB, both v3_ctc & v3_e2e_rnnt): 0.2–0.3 cuts WER 10–23% vs 0.5 — lower threshold = fewer false pauses = more context per chunk. Floor 0.2: at ~0.1 VAD stops seeing pauses → >30s blocks → mid-word arithmetic cuts. |
 | **No overlap/snap chunk-boundary post-processing** (YAGNI) | Measured: natural RU speech never has >30s continuous blocks (max ~5–6s at threshold≥0.3) → the arithmetic cut that splits words almost never fires; selective-overlap == baseline. Energy-snap is unsafe (can't tell a word-internal energy dip from a pause; hurts in worst case). If the domain becomes pause-less (singing/dense), add **selective overlap+stitch on ARITH boundaries**, not snap. |
+| **`NUM_THREADS` restored in `load_vad()`** (silero `set_num_threads(1)` at import clobbered it → all inference single-threaded) | Measured in a Linux/OpenMP container (4-core, prod parity): the silent clobber pinned inference to 1 thread; restoring `NUM_THREADS=4` cut wall-clock 3.3× (RTF 0.125→0.038) on a 754s file, near-linear to core count, oversubscription past it (8 threads on 4 cores = slower). Fixed at the cause (side-effect-free VAD loader), not by reordering engine init. **Parallel-chunk processing rejected as YAGNI**: torch intra-op already saturates the cores; extra concurrency only oversubscribes. Revisit only on a many-core host where one `forward` plateaus below core count. |
 
 <!-- Append new decisions as a new row above this hint. -->
 

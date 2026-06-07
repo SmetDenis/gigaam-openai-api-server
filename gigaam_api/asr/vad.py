@@ -26,10 +26,23 @@ def load_vad() -> object:
     We return an opaque handle (passed to `speech_intervals`); the JIT stack is
     the same as GigaAM's (torch) — without onnxruntime, so as not to spawn thread pools
     on weak CPUs (e.g. ~4 cores; see the ADR in CLAUDE.md).
-    """
-    from silero_vad import load_silero_vad
 
-    return load_silero_vad()
+    Root cause guard: silero_vad runs `torch.set_num_threads(1)` at import time
+    (silero_vad/model.py, module level — it fires on the first import in the process). We
+    capture the thread count BEFORE importing silero and restore it after, so loading the VAD
+    has no global side effect — otherwise it silently pins ALL downstream inference to a single
+    thread (NUM_THREADS ignored, ~3x slower on a 4-core CPU box). The save MUST precede the
+    import: capturing it afterwards would already read the clobbered 1.
+    """
+    import torch
+
+    saved_threads = torch.get_num_threads()
+    try:
+        from silero_vad import load_silero_vad
+
+        return load_silero_vad()
+    finally:
+        torch.set_num_threads(saved_threads)
 
 
 def speech_intervals(
