@@ -71,7 +71,7 @@ addopts = "-q --strict-markers"
 override-dependencies = ["onnx>=1.21.0"]
 
 [tool.uv.sources]
-gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "6e4b027c6fb554e09e8b9059b757a175295ab879" }
+gigaam = { git = "https://github.com/salute-developers/GigaAM.git", rev = "559d88d6b72541412743929f633a6ae7c9950b85" }
 # torch/torchaudio: on Linux (Docker) — CPU wheels from the PyTorch index (no CUDA);
 # on macOS (dev) — default PyPI wheels (with MPS). A single uv.lock covers both platforms
 # via the platform marker. See the ADR log in CLAUDE.md.
